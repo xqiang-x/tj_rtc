@@ -43,6 +43,7 @@
 build/
 Build/
 build-*/
+build_*/
 
 # CMake generated files
 CMakeFiles/
@@ -67,3 +68,14 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Android / Gradle
+.gradle/
+.idea/
+.cxx/
+*.apk
+*.apk.bak_*
+gradle-*-bin.zip
+
+# Qoder local workspace
+.qoder/

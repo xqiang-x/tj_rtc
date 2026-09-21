@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- 标题 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="RTC 推拉流配置"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="24dp"
+            android:layout_gravity="center_horizontal" />
+
+        <!-- 服务器地址 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="服务器地址"
+            android:textSize="14sp"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/et_server_ip"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="例如: 192.168.1.100"
+            android:inputType="textUri"
+            android:layout_marginBottom="16dp" />
+
+        <!-- 服务器端口 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="服务器端口"
+            android:textSize="14sp"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/et_server_port"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="例如: 9200"
+            android:inputType="number"
+            android:layout_marginBottom="16dp" />
+
+        <!-- 流名 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="流名"
+            android:textSize="14sp"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/et_stream_id"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="例如: stream1"
+            android:layout_marginBottom="16dp" />
+
+        <!-- 用户ID -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="用户ID"
+            android:textSize="14sp"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/et_user_id"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="例如: android_user"
+            android:layout_marginBottom="16dp" />
+
+        <!-- 音频开关 -->
+        <CheckBox
+            android:id="@+id/cb_enable_audio"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="开启音频"
+            android:checked="true"
+            android:layout_marginBottom="8dp" />
+
+        <!-- UDP/TCP 选项 -->
+        <CheckBox
+            android:id="@+id/cb_use_udp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="使用 UDP 模式（推荐）"
+            android:checked="true"
+            android:layout_marginBottom="24dp" />
+
+        <!-- 开始按钮 -->
+        <Button
+            android:id="@+id/btn_start"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="开始拉流"
+            android:textSize="18sp"
+            android:padding="12dp" />
+
+    </LinearLayout>
+
+</ScrollView>

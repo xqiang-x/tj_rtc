@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RTC App</string>
+    <string name="server_ip_hint">服务器地址 (例如: 192.168.1.100)</string>
+    <string name="server_port_hint">端口 (例如: 9200)</string>
+    <string name="stream_id_hint">流名 (例如: stream1)</string>
+    <string name="user_id_hint">用户ID (例如: android_user)</string>
+    <string name="enable_audio">开启音频</string>
+    <string name="start_pull">开始拉流</string>
+    <string name="stop">停止</string>
+    <string name="connecting">连接中...</string>
+</resources>

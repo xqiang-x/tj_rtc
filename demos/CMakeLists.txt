@@ -1,0 +1,31 @@
+# demos 分发：按平台与依赖条件构建
+# android_rtc_app 由 Gradle + NDK 驱动，不参与顶层 CMake 构建
+
+if(APPLE)
+    add_subdirectory(mac_camera_push)
+
+    find_package(SDL2 QUIET)
+    if(SDL2_FOUND)
+        add_subdirectory(mac_pull_test)
+    else()
+        message(STATUS "mac_pull_test skipped: SDL2 not found")
+    endif()
+else()
+    message(STATUS "mac demos skipped: requires macOS")
+endif()
+
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(LIBCAMERA QUIET IMPORTED_TARGET libcamera)
+    pkg_check_modules(X264 QUIET IMPORTED_TARGET x264)
+endif()
+if(LIBCAMERA_FOUND)
+    add_subdirectory(raspberry_pi_pusher)
+else()
+    message(STATUS "raspberry_pi_pusher skipped: libcamera not found")
+endif()
+if(X264_FOUND)
+    add_subdirectory(sim_pusher)
+else()
+    message(STATUS "sim_pusher skipped: x264 not found")
+endif()
