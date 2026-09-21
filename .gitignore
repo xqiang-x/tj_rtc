@@ -76,6 +76,7 @@ Testing/
 *.apk
 *.apk.bak_*
 gradle-*-bin.zip
+local.properties
 
 # Qoder local workspace
 .qoder/
