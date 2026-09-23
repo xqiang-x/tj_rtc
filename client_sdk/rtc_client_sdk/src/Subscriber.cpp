@@ -191,30 +191,34 @@ void Subscriber::SendCtrlUpstream(const uint8_t* data, size_t len, bool reliable
 
     if (reliable) {
         // 可靠：走 TCP（带 4 字节长度前缀），帧首需带 SFU header 字节
-        std::vector<uint8_t> tcpMsg(1 + msg.size());
-        tcpMsg[0] = sfu::MakeHeader(sfu::PROTOCOL_VERSION, static_cast<uint8_t>(sfu::MsgType::kCmd));
-        memcpy(tcpMsg.data() + 1, msg.data(), msg.size());
-        if (m_useUdp && m_ctrlTcpFd >= 0) {
-            uint8_t prefix[4] = {
-                (uint8_t)(tcpMsg.size() >> 24), (uint8_t)(tcpMsg.size() >> 16),
-                (uint8_t)(tcpMsg.size() >> 8),  (uint8_t)(tcpMsg.size())
-            };
-            ::send(m_ctrlTcpFd, prefix, 4, MSG_NOSIGNAL);
-            ::send(m_ctrlTcpFd, tcpMsg.data(), tcpMsg.size(), MSG_NOSIGNAL);
-        } else if (!m_useUdp && m_sockFd >= 0) {
-            TcpSendAll(tcpMsg.data(), tcpMsg.size());
+        if ((m_useUdp && m_ctrlTcpFd >= 0) || (!m_useUdp && m_sockFd >= 0)) {
+            std::vector<uint8_t> tcpMsg(1 + msg.size());
+            tcpMsg[0] = sfu::MakeHeader(sfu::PROTOCOL_VERSION, static_cast<uint8_t>(sfu::MsgType::kCmd));
+            memcpy(tcpMsg.data() + 1, msg.data(), msg.size());
+            if (m_useUdp) {
+                uint8_t prefix[4] = {
+                    (uint8_t)(tcpMsg.size() >> 24), (uint8_t)(tcpMsg.size() >> 16),
+                    (uint8_t)(tcpMsg.size() >> 8),  (uint8_t)(tcpMsg.size())
+                };
+                ::send(m_ctrlTcpFd, prefix, 4, MSG_NOSIGNAL);
+                ::send(m_ctrlTcpFd, tcpMsg.data(), tcpMsg.size(), MSG_NOSIGNAL);
+            } else {
+                TcpSendAll(tcpMsg.data(), tcpMsg.size());
+            }
+            return;
         }
+        // 可靠通道未就绪（如 UDP 模式下 ctrl TCP 尚未建立）：退回 UDP 尽力而为，避免静默丢包
+    }
+
+    // 不可靠 或 可靠通道不可用时的回落：走 UDP（需加 SFU header byte）
+    if (m_useUdp) {
+        std::vector<uint8_t> udpMsg(1 + msg.size());
+        udpMsg[0] = sfu::MakeHeader(sfu::PROTOCOL_VERSION, static_cast<uint8_t>(sfu::MsgType::kCmd));
+        memcpy(udpMsg.data() + 1, msg.data(), msg.size());
+        UdpSendAll(udpMsg.data(), udpMsg.size());
     } else {
-        // 不可靠：走 UDP（需加 SFU header byte）
-        if (m_useUdp) {
-            std::vector<uint8_t> udpMsg(1 + msg.size());
-            udpMsg[0] = sfu::MakeHeader(sfu::PROTOCOL_VERSION, static_cast<uint8_t>(sfu::MsgType::kCmd));
-            memcpy(udpMsg.data() + 1, msg.data(), msg.size());
-            UdpSendAll(udpMsg.data(), udpMsg.size());
-        } else {
-            // TCP 模式无 UDP，降级为 TCP
-            TcpSendAll(msg.data(), msg.size());
-        }
+        // TCP 模式无 UDP，降级为 TCP
+        TcpSendAll(msg.data(), msg.size());
     }
 }
 
@@ -235,6 +239,10 @@ void Subscriber::DispatchControlMessage(const uint8_t* data, size_t len) {
         (static_cast<uint32_t>(data[6]));
     const uint8_t* payload = data + 7;
     size_t payloadLen = len - 7;
+
+    // P1（设计 §7.4）：下游广播的 session 字段即推流端会话，先行记录可使
+    // 上行 RC/遥测不依赖首个媒体帧到达
+    if (sourceSessionId != 0) m_sourceSessionId = sourceSessionId;
 
     if (m_onControlData) {
         m_onControlData(sourceSessionId, payload, payloadLen);
@@ -291,7 +299,89 @@ void Subscriber::CtrlRecvThreadFunc() {
     }
 
 exit_loop:
+    // 连接已失效：置 false 后由网络线程保活 tick 调用 EnsureCtrlTcp 重建，
+    // 保证上行 ctrl（MAVLink/遥控）通道自愈，避免静默失效
+    m_ctrlRunning.store(false);
     std::cout << "[Pull-Ctrl] 信令接收线程退出" << std::endl;
+}
+
+// ─────────────────────────────────────────────────────────────
+// UDP 模式：建立/重建可靠信令 TCP 连接（上行 ctrl 的可靠通道）
+// 注：实测对某推流端会话（公网 NAT 后的 UDP publisher）UDP(不可靠)上行
+// ctrl 0 交付，而 TCP(reliable) 上行 15/15 全达；SFU 对新建/复用的测试
+// 会话可转发 UDP 上行，疑与推流端会话状态相关，不可依赖。上行 ctrl 一律
+// 走本连接（幂等，可在保活 tick 中周期调用实现自愈）。
+// ─────────────────────────────────────────────────────────────
+void Subscriber::EnsureCtrlTcp() {
+    if (!m_useUdp || m_ctrlRunning.load()) return;
+
+    if (m_ctrlTcpFd >= 0) {  // 清理残留的死连接
+        ::shutdown(m_ctrlTcpFd, SHUT_RDWR);
+        ::close(m_ctrlTcpFd);
+        m_ctrlTcpFd = -1;
+    }
+
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return;
+
+    struct timeval tv;
+    tv.tv_sec = 3;
+    tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<uint16_t>(m_port));
+    inet_pton(AF_INET, m_serverIp.c_str(), &addr.sin_addr);
+
+    if (::connect(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        ::close(fd);
+        std::cerr << "[Pull] 可靠信令 TCP 连接失败: " << strerror(errno) << std::endl;
+        return;
+    }
+
+    // 发送注册请求：纯控制会话，flags 全 false（不收媒体、不注册流，仅用于信令配对）
+    sfu::SubscribeFlags flags{};
+    flags.audio    = false;
+    flags.video    = false;
+    flags.data     = false;
+    flags.reserved = 0;
+    auto req = sfu::SerializeSubscribeReq(sfu::SubscribeRole::kSubscriber, m_streamId, m_userId, flags);
+    uint8_t prefix[4] = {
+        (uint8_t)(req.size() >> 24), (uint8_t)(req.size() >> 16),
+        (uint8_t)(req.size() >> 8),  (uint8_t)(req.size())
+    };
+    ::send(fd, prefix, 4, MSG_NOSIGNAL);
+    ::send(fd, req.data(), req.size(), MSG_NOSIGNAL);
+
+    // 读取响应
+    uint8_t respPrefix[4];
+    size_t got = 0;
+    while (got < 4) {
+        ssize_t r = ::recv(fd, respPrefix + got, 4 - got, 0);
+        if (r <= 0) break;
+        got += r;
+    }
+    if (got == 4) {
+        uint32_t frameLen = (respPrefix[0] << 24) | (respPrefix[1] << 16) |
+                            (respPrefix[2] << 8) | respPrefix[3];
+        if (frameLen > 0 && frameLen < 1024) {
+            std::vector<uint8_t> resp(frameLen);
+            got = 0;
+            while (got < frameLen) {
+                ssize_t r = ::recv(fd, resp.data() + got, frameLen - got, 0);
+                if (r <= 0) break;
+                got += r;
+            }
+        }
+    }
+    m_ctrlTcpFd = fd;
+    std::cout << "[Pull] 可靠信令 TCP 连接已建立" << std::endl;
+
+    if (m_ctrlRecvThread.joinable()) m_ctrlRecvThread.join();
+    m_ctrlRunning.store(true);
+    m_ctrlRecvThread = std::thread([this]() { CtrlRecvThreadFunc(); });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -319,70 +409,8 @@ void Subscriber::NetThreadFunc() {
             return;
         }
 
-        // 建立 TCP 连接用于可靠信令
-        {
-            int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-            if (fd >= 0) {
-                struct timeval tv;
-                tv.tv_sec = 3;
-                tv.tv_usec = 0;
-                setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-                setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-                struct sockaddr_in addr{};
-                addr.sin_family = AF_INET;
-                addr.sin_port = htons(static_cast<uint16_t>(m_port));
-                inet_pton(AF_INET, m_serverIp.c_str(), &addr.sin_addr);
-
-                if (::connect(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
-                    // 发送注册请求：纯控制会话，flags 全 false（不收媒体、不注册流，仅用于信令配对）
-                    sfu::SubscribeFlags flags{};
-                    flags.audio    = false;
-                    flags.video    = false;
-                    flags.data     = false;
-                    flags.reserved = 0;
-                    auto req = sfu::SerializeSubscribeReq(sfu::SubscribeRole::kSubscriber, m_streamId, m_userId, flags);
-                    uint8_t prefix[4] = {
-                        (uint8_t)(req.size() >> 24), (uint8_t)(req.size() >> 16),
-                        (uint8_t)(req.size() >> 8),  (uint8_t)(req.size())
-                    };
-                    ::send(fd, prefix, 4, MSG_NOSIGNAL);
-                    ::send(fd, req.data(), req.size(), MSG_NOSIGNAL);
-
-                    // 读取响应
-                    uint8_t respPrefix[4];
-                    size_t got = 0;
-                    while (got < 4) {
-                        ssize_t r = ::recv(fd, respPrefix + got, 4 - got, 0);
-                        if (r <= 0) break;
-                        got += r;
-                    }
-                    if (got == 4) {
-                        uint32_t frameLen = (respPrefix[0] << 24) | (respPrefix[1] << 16) |
-                                            (respPrefix[2] << 8) | respPrefix[3];
-                        if (frameLen > 0 && frameLen < 1024) {
-                            std::vector<uint8_t> resp(frameLen);
-                            got = 0;
-                            while (got < frameLen) {
-                                ssize_t r = ::recv(fd, resp.data() + got, frameLen - got, 0);
-                                if (r <= 0) break;
-                                got += r;
-                            }
-                        }
-                    }
-                    m_ctrlTcpFd = fd;
-                    std::cout << "[Pull] 可靠信令 TCP 连接已建立" << std::endl;
-
-                    // 启动可靠信令接收线程
-                    if (m_ctrlRecvThread.joinable()) m_ctrlRecvThread.join();
-                    m_ctrlRunning.store(true);
-                    m_ctrlRecvThread = std::thread([this]() { CtrlRecvThreadFunc(); });
-                } else {
-                    ::close(fd);
-                    std::cerr << "[Pull] 可靠信令 TCP 连接失败: " << strerror(errno) << std::endl;
-                }
-            }
-        }
+        // 建立 TCP 连接用于可靠信令（上行 ctrl 的可靠通道）
+        EnsureCtrlTcp();
 
         // FEC 接收端：内部帧按序提交；缺帧超 2s 缓存期丢弃并请求关键帧；
         // NACK/STATS 回传走 UDP 通道（InitFrameReceiver 内按 m_useUdp 分发）
@@ -410,6 +438,9 @@ void Subscriber::NetThreadFunc() {
                 // 服务器 0x13 分支刷新会话活跃，HandleStreamData 对自身会话安全忽略
                 auto hb = sfu::SerializeStreamData(m_sessionId, nullptr, 0);
                 UdpSendAll(hb.data(), hb.size());
+
+                // 可靠信令 TCP 断线自愈：上行 ctrl 依赖该通道（SFU 不转发 UDP 上行 ctrl）
+                EnsureCtrlTcp();
             }
 
             std::vector<uint8_t> pkt;

@@ -96,6 +96,9 @@ private:
     // FEC 接收端初始化（UDP/TCP 共用；NACK/STATS 回传按模式走各自通道）
     void InitFrameReceiver();
 
+    // UDP 模式下建立/重建可靠信令 TCP 连接（幂等：已有活动连接时直接返回）
+    void EnsureCtrlTcp();
+
     // FEC 接收端
     std::unique_ptr<fec_protocol::FrameReceiver> m_frameReceiver;
 
