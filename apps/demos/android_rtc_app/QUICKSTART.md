@@ -13,12 +13,12 @@
 
 3. **确保项目结构正确**
    ```
-   qoder_libuv/
-   ├── android_rtc_app/      ← 本应用
-   ├── rtc_client_sdk/       ← 必须有
-   ├── sfu_server/           ← 必须有
-   ├── frame_protoc/         ← 必须有
-   └── pacer/                ← 必须有
+   tj_rtc/
+   ├── apps/demos/android_rtc_app/          ← 本应用
+   └── rtc/
+       ├── client_sdk/rtc_client_sdk/       ← RTC 通信 SDK（必须有）
+       ├── common/sfu_protocol/             ← SFU 协议头
+       └── libs/                            ← frame_protoc / pacer / mem_pool
    ```
 
 ## 编译方法（3选1）

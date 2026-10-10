@@ -1,6 +1,6 @@
 [submodule "OpenHD"]
-	path = OpenHD
+	path = apps/OpenHD
 	url = https://github.com/xqiang-x/OpenHD.git
 [submodule "QOpenHD"]
-	path = QOpenHD
+	path = apps/QOpenHD
 	url = https://github.com/xqiang-x/QOpenHD.git

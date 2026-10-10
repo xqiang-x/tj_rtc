@@ -12,9 +12,9 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GST REQUIRED IMPORTED_TARGET gstreamer-1.0 gstreamer-app-1.0)
 
 # ── rtc_client_sdk（推流 SDK）────────────────────────────────────────────────
-# 路径: demos/jetson_camera_push -> demos -> tj_rtc -> client_sdk/rtc_client_sdk
+# 路径: apps/demos/jetson_camera_push -> apps/demos -> apps -> tj_rtc -> rtc/client_sdk/rtc_client_sdk
 if(NOT TARGET rtc_client_sdk)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../client_sdk/rtc_client_sdk
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../rtc/client_sdk/rtc_client_sdk
                      ${CMAKE_BINARY_DIR}/rtc_client_sdk_build)
 endif()
 

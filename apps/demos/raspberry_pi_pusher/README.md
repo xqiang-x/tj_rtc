@@ -1,6 +1,6 @@
 # raspberry_pi_pusher
 
-模仿 [`rpicam-apps`](https://github.com/raspberrypi/rpicam-apps) 的极简版**树莓派视频采集 + H.264 硬件编码 + 推流**程序，使用 [`rtc_client_sdk`](../../rtc_client_sdk) 把视频推到 SFU 服务器。
+模仿 [`rpicam-apps`](https://github.com/raspberrypi/rpicam-apps) 的极简版**树莓派视频采集 + H.264 硬件编码 + 推流**程序，使用 [`rtc_client_sdk`](../../../rtc/client_sdk/rtc_client_sdk) 把视频推到 SFU 服务器。
 
 整个流水线只保留最核心的代码路径，方便阅读与裁剪：
 

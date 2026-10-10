@@ -8,15 +8,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_library(log-lib log)
 
 # tj_rtc 项目根目录
-# jni -> main -> src -> app -> android_rtc_app -> demos -> tj_rtc (6 个 ..)
-set(PROJECT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../)
+# jni -> main -> src -> app -> android_rtc_app -> demos -> apps -> tj_rtc (7 个 ..)
+set(PROJECT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../../)
 
-# 依赖目录
-set(RTC_SDK_DIR ${PROJECT_ROOT}/client_sdk/rtc_client_sdk)
-set(SFU_PROTOCOL_DIR ${PROJECT_ROOT}/common/sfu_protocol)
-set(FRAME_PROTOC_DIR ${PROJECT_ROOT}/libs/frame_protoc)
-set(PACER_DIR ${PROJECT_ROOT}/libs/pacer)
-set(MEM_POOL_DIR ${PROJECT_ROOT}/libs/mem_pool)
+# 依赖目录（rtc/ 为 RTC 核心）
+set(RTC_SDK_DIR ${PROJECT_ROOT}/rtc/client_sdk/rtc_client_sdk)
+set(SFU_PROTOCOL_DIR ${PROJECT_ROOT}/rtc/common/sfu_protocol)
+set(FRAME_PROTOC_DIR ${PROJECT_ROOT}/rtc/libs/frame_protoc)
+set(PACER_DIR ${PROJECT_ROOT}/rtc/libs/pacer)
+set(MEM_POOL_DIR ${PROJECT_ROOT}/rtc/libs/mem_pool)
 
 # 编译所有源文件
 add_library(rtc_native SHARED

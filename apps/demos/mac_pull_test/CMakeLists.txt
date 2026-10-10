@@ -24,9 +24,9 @@ find_library(FW_COREVIDEO     CoreVideo     REQUIRED)
 find_library(FW_COREFOUNDATION CoreFoundation REQUIRED)
 
 # 守卫式引入 rtc_client_sdk（支持独立构建）
-# 路径: demos/mac_pull_test -> demos -> tj_rtc -> client_sdk/rtc_client_sdk
+# 路径: apps/demos/mac_pull_test -> apps/demos -> apps -> tj_rtc -> rtc/client_sdk/rtc_client_sdk
 if(NOT TARGET rtc_client_sdk)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../client_sdk/rtc_client_sdk
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../rtc/client_sdk/rtc_client_sdk
                      ${CMAKE_BINARY_DIR}/rtc_client_sdk_build)
 endif()
 

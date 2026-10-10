@@ -15,20 +15,21 @@ option(BUILD_TESTS  "Build tests"                         ON)
 
 find_package(Threads REQUIRED)
 
-# 共用协议头 + 基础库（无条件构建）
-add_subdirectory(common/sfu_protocol)
-add_subdirectory(libs/frame_protoc)
-add_subdirectory(libs/pacer)
-add_subdirectory(libs/mem_pool)
+# ── rtc/：RTC 核心（共用协议头 + 基础库，无条件构建）─────────────────────────
+add_subdirectory(rtc/common/sfu_protocol)
+add_subdirectory(rtc/libs/frame_protoc)
+add_subdirectory(rtc/libs/pacer)
+add_subdirectory(rtc/libs/mem_pool)
 
 if(BUILD_SERVER)
-    add_subdirectory(server)
+    add_subdirectory(rtc/server)
 endif()
 
 if(BUILD_SDK)
-    add_subdirectory(client_sdk/rtc_client_sdk)
+    add_subdirectory(rtc/client_sdk/rtc_client_sdk)
 endif()
 
+# ── apps/：使用 RTC 的端（各平台推拉流示例）──────────────────────────────────
 if(BUILD_DEMOS)
-    add_subdirectory(demos)
+    add_subdirectory(apps/demos)
 endif()

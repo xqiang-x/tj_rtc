@@ -10,9 +10,9 @@ set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS}  -Wall -Wno-unused-parameter")
 set(CMAKE_OBJCXX_FLAGS "${CMAKE_OBJCXX_FLAGS} -Wall -Wno-unused-parameter")
 
 # 守卫式引入 rtc_client_sdk（支持独立构建）
-# 路径: demos/mac_camera_push -> demos -> tj_rtc -> client_sdk/rtc_client_sdk
+# 路径: apps/demos/mac_camera_push -> apps/demos -> apps -> tj_rtc -> rtc/client_sdk/rtc_client_sdk
 if(NOT TARGET rtc_client_sdk)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../client_sdk/rtc_client_sdk
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../rtc/client_sdk/rtc_client_sdk
                      ${CMAKE_BINARY_DIR}/rtc_client_sdk_build)
 endif()
 

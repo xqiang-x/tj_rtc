@@ -50,15 +50,15 @@ android_rtc_app/
 
 ### 依赖项目
 
-确保以下项目在同一目录下：
+确保仓库完整（本应用位于 `apps/demos/android_rtc_app`，依赖 `rtc/` 下的核心库）：
 
 ```
-qoder_libuv/
-├── android_rtc_app/      # 本应用
-├── rtc_client_sdk/       # RTC 通信 SDK
-├── sfu_server/           # SFU 服务器库
-├── frame_protoc/         # FEC 编解码库
-└── pacer/                # 带宽控制库
+tj_rtc/
+├── apps/demos/android_rtc_app/          # 本应用
+└── rtc/
+    ├── client_sdk/rtc_client_sdk/       # RTC 通信 SDK
+    ├── common/sfu_protocol/             # SFU 协议头
+    └── libs/                            # frame_protoc / pacer / mem_pool
 ```
 
 ## 编译步骤

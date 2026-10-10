@@ -14,9 +14,9 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
 )
 
 # ── rtc_client_sdk（推流 SDK）─────────────────────────────────────────────────
-# 路径: demos/linux_camera_push -> demos -> tj_rtc -> client_sdk/rtc_client_sdk
+# 路径: apps/demos/linux_camera_push -> apps/demos -> apps -> tj_rtc -> rtc/client_sdk/rtc_client_sdk
 if(NOT TARGET rtc_client_sdk)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../client_sdk/rtc_client_sdk
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../rtc/client_sdk/rtc_client_sdk
                      ${CMAKE_BINARY_DIR}/rtc_client_sdk_build)
 endif()
 

@@ -14,7 +14,7 @@
 ## 1. 背景与目标
 
 OpenHD 当前支持三种链路：WFB（monitor 模式 wifi 广播）、Ethernet、Microhard，通过业务无关的
-`OHDLink` 抽象（`OpenHD/OpenHD/ohd_common/inc/openhd_link.hpp:54`）对上层提供统一的
+`OHDLink` 抽象（`apps/OpenHD/OpenHD/ohd_common/inc/openhd_link.hpp:54`）对上层提供统一的
 "视频单向 + 遥测/RC 双向 + 音频单向" 契约。
 
 tj_rtc 是以 SFU 为中心的音视频传输 SDK（Publisher/Subscriber + 控制信令通道），适合在
@@ -84,14 +84,14 @@ RTP 转发给 QOpenHD。tj_rtc 侧不感知 RTP，RTP 侧不感知 tj_rtc。
 | F2 | `EthernetLink` 是最小实现模板（~158 行），含 `ethernet.txt` 配置模式 | `ohd_interface/src/ethernet_link.cpp` |
 | F3 | 链路装配点：ctor 短路创建 + `get_link_handle()` + `has_primary_link()` | `ohd_interface/src/ohd_interface.cpp:77-118, 557-570, 571` |
 | F4 | air 的 `FragmentedVideoFrame.rtp_fragments` = RTP 包（含 12B 头），边界由 FU-E 启发式判定，**对单 NALU 包不返回 fu_end（边界是松散的，可能跨帧/含多帧）** | `rtp_eof_helper.cpp:98-107`；`gstreamerstream.cpp:645-682` |
-| F5 | tj_rtc 链路帧约定：**一次 PushVideoFrame = 一个完整访问单元（Annex-B），IDR 帧内嵌 SPS/PPS，SEI/AUD 作边界丢弃** | `demos/raspberry_pi_pusher/src/NaluSplitter.cpp:64-100`；`demos/android_rtc_app/.../RtcClient.java:489-491` |
+| F5 | tj_rtc 链路帧约定：**一次 PushVideoFrame = 一个完整访问单元（Annex-B），IDR 帧内嵌 SPS/PPS，SEI/AUD 作边界丢弃** | `apps/demos/raspberry_pi_pusher/src/NaluSplitter.cpp:64-100`；`apps/demos/android_rtc_app/.../RtcClient.java:489-491` |
 | F6 | 订阅端 `OnFrame` 的 payload 首字节 = FrameType（0x01 PARAMS /0x02 IDR /0x03 P /0x10 AUDIO），其后为裸码流 | `Subscriber.cpp:140-171` |
 | F7 | ground 视频数据逐包转发到 `127.0.0.1:5600/5601`（+5800/5801、外部设备），QOpenHD 无感知 | `ohd_video_ground.cpp:39-46, 87-97` |
 | F8 | 音频 = RTP PCMA（alaw, 8kHz）包 | `gstaudiostream.cpp:110-145, 217-225` |
 | F9 | SFU 在新订阅者/丢包时向上游转发 PLI（500ms 节流）→ air 端 `SetOnKeyFrameRequest` | `SfuServer.cpp:919-924, 1059-1073` |
 | F10 | ground 订阅失败（流不存在）会直接退出网络线程、置 `m_running=false`；断连则线程退出但 `m_running` 仍为 true | `Subscriber.cpp:513-519`（TCP/UDP 路径同构） |
 | F11 | Publisher 自带断线检测与重连（1s 间隔），UDP 模式有 PONG/失败计数兜底 | `Publisher.h:174-192` |
-| F12 | FEC 按 256 块/组自动切分多组，**大帧（数百 KB IDR）无硬上限** | `libs/frame_protoc/src/types.h:14`；`protocol.h:17-18` |
+| F12 | FEC 按 256 块/组自动切分多组，**大帧（数百 KB IDR）无硬上限** | `rtc/libs/frame_protoc/src/types.h:14`；`protocol.h:17-18` |
 | F13 | SDK 仅依赖 Threads + 内嵌 cm256cc；aarch64 自动 NEON 分支 | `frame_protoc/CMakeLists.txt:30-38` |
 | F14 | OpenHD 与 tj_rtc 同为 C++17；tj_rtc 为 Apache-2.0（与 GPLv3 兼容） | 各 CMakeLists；LICENSE |
 
@@ -442,7 +442,8 @@ if (OHDFilesystemUtil::exists(std::string(getConfigBasePath()) + "rtc.txt")) {
 
 ### 7.2 源码 vendor 与 CMake
 
-需要 vendor 的目录（不含 server/demos，SDK 仅依赖这些）：
+需要 vendor 的目录（不含 server/demos，SDK 仅依赖这些）。**源为仓库 `rtc/` 目录**
+（即「SDK 根 = `rtc/`」：`rtc/{common,libs,client_sdk}` 的对应子树），vendor 目标布局：
 
 ```
 ohd_interface/lib/tj_rtc/
@@ -464,8 +465,9 @@ target_link_libraries(OHDInterfaceLib PRIVATE rtc_client_sdk)
 
 - SDK 的 CMake 自带守卫式依赖引入（`sfu_protocol/frame_protoc/pacer/mem_pool` 不存在则
   自动 add_subdirectory），且 `BUILD_DEMOS` 在非 standalone 时默认 OFF；
-  `TJ_RTC_ROOT` 按 `client_sdk/rtc_client_sdk/../..` 解析 → vendor 布局必须保持上表结构。
-- 开发期：`-DTJ_RTC_SDK_DIR=/media/ubuntu/linux/tj_rtc` 直接指向 tj_rtc 仓库，免拷贝；
+  `TJ_RTC_ROOT` 按 `client_sdk/rtc_client_sdk/../..` 解析 → vendor 布局必须保持上表结构
+  （该约定使 SDK 根 = `rtc/`，开发期直接指向仓库 `rtc/` 即可）。
+- 开发期：`-DTJ_RTC_SDK_DIR=/media/ubuntu/linux/tj_rtc/rtc` 直接指向仓库 `rtc/`，免拷贝；
   发布期：subtree/submodule 固定版本到 `lib/tj_rtc`。
 - 交叉编译：frame_protoc 已按 `CMAKE_SYSTEM_PROCESSOR` 自动选择 `USE_NEON`（F13），
   无额外依赖；仅需 Threads（OpenHD 已链接）。
@@ -544,10 +546,10 @@ pi4/OpenHD/App（L2–L4）**。每级失败时排查范围限定于"本级胶�
 
 - 编译（不碰 OpenHD 主构建，一条命令）：
   ```bash
-  g++ -std=c++17 -O2 -Wall -Wextra -I OpenHD/OpenHD/ohd_interface/inc \
-      OpenHD/OpenHD/ohd_interface/src/rtp_es_assembler.cpp \
-      OpenHD/OpenHD/ohd_interface/src/es_rtp_packetizer.cpp \
-      OpenHD/OpenHD/ohd_interface/test/test_rtp_es.cpp -o es_selftest
+  g++ -std=c++17 -O2 -Wall -Wextra -I apps/OpenHD/OpenHD/ohd_interface/inc \
+      apps/OpenHD/OpenHD/ohd_interface/src/rtp_es_assembler.cpp \
+      apps/OpenHD/OpenHD/ohd_interface/src/es_rtp_packetizer.cpp \
+      apps/OpenHD/OpenHD/ohd_interface/test/test_rtp_es.cpp -o es_selftest
   ```
   前提：组件仅用 std 类型 + `std::function` 回调，不 include openhd::log / OHDLink
   （日志经回调暴露）——这是"能抽出来"的硬约束，代码评审时检查。
@@ -588,7 +590,7 @@ rtc_gnd_probe(Subscriber+packetizer) → 127.0.0.1:5610 → gst rtph264depay ! �
   **不进 OpenHD 主构建**）；与 gst 之间用裸 UDP socket 对接（CLI gst-launch 起源/收端，
   工具不引入 gst 头文件依赖）。构建：
   ```bash
-  cmake -S OpenHD/OpenHD/ohd_interface/test/rtc_probe -B /tmp/rtc_probe_build
+  cmake -S apps/OpenHD/OpenHD/ohd_interface/test/rtc_probe -B /tmp/rtc_probe_build
   cmake --build /tmp/rtc_probe_build -j
   ```
 - 两端 AU 落盘 → `cmp` 逐字节比对（源=端到端，充要验证）。
@@ -644,7 +646,7 @@ CPU/内存（pi4）、air 端队列深度。
   → 开发机 gst `rtp264depay` 收流落盘。
 - pi4 侧构建：探针源码部署 `~/rtc_l2/`（新增目录，未动设备现有 `~/tj_rtc` 与 pusher），
   CMake 以 `-DTJ_RTC_ROOT=~/rtc_l2/tj_rtc` 使用**当前版 SDK 的 vendor 子集**
-  （`client_sdk/common/libs`，~0.9MB，布局即 §7.2）——顺带验证了 vendor 子集在 ARM64
+  （`rtc/{client_sdk,common,libs}`，~0.9MB，布局即 §7.2）——顺带验证了 vendor 子集在 ARM64
   自洽可构建（F13 NEON 自动选择生效）。**发现**：pi4 原有 `~/tj_rtc` 是旧版 SDK
   （`Subscriber` 无 `SetOnSubscribeFailed` 等新 API），故不复用它。
 - 结果：30s 订阅 `frames=930`（31fps 实速，`params=30 idr=30 p=870` 与 gop=30 吻合），
@@ -664,12 +666,12 @@ CPU/内存（pi4）、air 端队列深度。
   RGB Δ≈5/255**（QOpenHD 侧 (206,197,201) vs 源 (212,201,207)，差异为 HUD 半透明叠加
   与缩放所致）——出画确认。注意：pivideo 源画面本身为静态渐变（相机对准墙面），
   运动画面/花屏评估留待 L3/L4 有真实运动源时进行。
-- 复现命令（本次原样）：
+- 复现命令（路径已按重组后布局适配）：
   ```bash
   # pi4 部署（开发机执行；新增 ~/rtc_l2，不动设备现有 ~/tj_rtc）
-  tar -C OpenHD -cf - OpenHD/ohd_interface/{inc/{rtp_es_assembler,es_rtp_packetizer}.h,src/{rtp_es_assembler,es_rtp_packetizer}.cpp,test/rtc_probe/{CMakeLists.txt,rtc_gnd_probe.cpp,rtc_air_probe.cpp}} \
+  tar -C apps/OpenHD -cf - OpenHD/ohd_interface/{inc/{rtp_es_assembler,es_rtp_packetizer}.h,src/{rtp_es_assembler,es_rtp_packetizer}.cpp,test/rtc_probe/{CMakeLists.txt,rtc_gnd_probe.cpp,rtc_air_probe.cpp}} \
     | ssh pi4 'mkdir -p ~/rtc_l2 && tar -C ~/rtc_l2 -xf -'
-  tar -cf - client_sdk common libs | ssh pi4 'mkdir -p ~/rtc_l2/tj_rtc && tar -C ~/rtc_l2/tj_rtc -xf -'
+  tar -C rtc -cf - client_sdk common libs | ssh pi4 'mkdir -p ~/rtc_l2/tj_rtc && tar -C ~/rtc_l2/tj_rtc -xf -'
   ssh pi4 'cd ~/rtc_l2 && cmake -S OpenHD/ohd_interface/test/rtc_probe -B build \
       -DTJ_RTC_ROOT=$HOME/rtc_l2/tj_rtc && cmake --build build -j4 --target rtc_gnd_probe'
   # 运行（地面机先起 gst 监听 <PORT>，再把 --out-ip 指向地面机 IP）
@@ -812,27 +814,27 @@ CPU/内存（pi4）、air 端队列深度。
 
 | 用途 | 位置 |
 |---|---|
-| OHDLink 契约 | `OpenHD/OpenHD/ohd_common/inc/openhd_link.hpp:54` |
-| 链路实现模板 | `OpenHD/OpenHD/ohd_interface/src/ethernet_link.cpp` |
-| 链路装配 | `OpenHD/OpenHD/ohd_interface/src/ohd_interface.cpp:77-118, 557-571` |
-| RtcLink 实现（M2） | `OpenHD/OpenHD/ohd_interface/src/rtc_link.cpp`；头 `inc/rtc_link.h` |
-| RtcConfig（M2） | `OpenHD/OpenHD/ohd_interface/src/rtc_config.cpp`；头 `inc/rtc_config.h` |
-| RtcLink 冒烟工具（M2） | `OpenHD/OpenHD/ohd_interface/test/rtc_probe/smoke/`（build.sh + run_smoke.sh + rtc.txt.example） |
-| L2 QOpenHD 无 root 安装/启动（M3） | `OpenHD/OpenHD/ohd_interface/test/rtc_probe/l2_qopenhd/`（install_qopenhd_noroot.sh + run_qopenhd.sh） |
-| air 视频发送点 | `OpenHD/OpenHD/ohd_video/src/ohd_video_air.cpp:291` |
-| ground 视频转发 | `OpenHD/OpenHD/ohd_video/src/ohd_video_ground.cpp:48, 87-97` |
-| RTP 边界松散证据 | `OpenHD/OpenHD/ohd_video/src/rtp_eof_helper.cpp:98-107` |
-| AU 约定（pusher） | `demos/raspberry_pi_pusher/src/NaluSplitter.cpp:64-100` |
-| AU 约定（Android） | `demos/android_rtc_app/app/src/main/java/com/example/rtcap/RtcClient.java:489-491` |
-| SDK API | `client_sdk/rtc_client_sdk/include/Publisher.h, Subscriber.h` |
-| FrameType 映射 | `client_sdk/rtc_client_sdk/src/Subscriber.cpp:148-171` |
-| SFU PLI | `server/sfu_server/SfuServer.cpp:919-924, 1059-1073` |
-| 订阅失败退出 | `client_sdk/rtc_client_sdk/src/Subscriber.cpp:513-519` |
+| OHDLink 契约 | `apps/OpenHD/OpenHD/ohd_common/inc/openhd_link.hpp:54` |
+| 链路实现模板 | `apps/OpenHD/OpenHD/ohd_interface/src/ethernet_link.cpp` |
+| 链路装配 | `apps/OpenHD/OpenHD/ohd_interface/src/ohd_interface.cpp:77-118, 557-571` |
+| RtcLink 实现（M2） | `apps/OpenHD/OpenHD/ohd_interface/src/rtc_link.cpp`；头 `inc/rtc_link.h` |
+| RtcConfig（M2） | `apps/OpenHD/OpenHD/ohd_interface/src/rtc_config.cpp`；头 `inc/rtc_config.h` |
+| RtcLink 冒烟工具（M2） | `apps/OpenHD/OpenHD/ohd_interface/test/rtc_probe/smoke/`（build.sh + run_smoke.sh + rtc.txt.example） |
+| L2 QOpenHD 无 root 安装/启动（M3） | `apps/OpenHD/OpenHD/ohd_interface/test/rtc_probe/l2_qopenhd/`（install_qopenhd_noroot.sh + run_qopenhd.sh） |
+| air 视频发送点 | `apps/OpenHD/OpenHD/ohd_video/src/ohd_video_air.cpp:291` |
+| ground 视频转发 | `apps/OpenHD/OpenHD/ohd_video/src/ohd_video_ground.cpp:48, 87-97` |
+| RTP 边界松散证据 | `apps/OpenHD/OpenHD/ohd_video/src/rtp_eof_helper.cpp:98-107` |
+| AU 约定（pusher） | `apps/demos/raspberry_pi_pusher/src/NaluSplitter.cpp:64-100` |
+| AU 约定（Android） | `apps/demos/android_rtc_app/app/src/main/java/com/example/rtcap/RtcClient.java:489-491` |
+| SDK API | `rtc/client_sdk/rtc_client_sdk/include/Publisher.h, Subscriber.h` |
+| FrameType 映射 | `rtc/client_sdk/rtc_client_sdk/src/Subscriber.cpp:148-171` |
+| SFU PLI | `rtc/server/sfu_server/SfuServer.cpp:919-924, 1059-1073` |
+| 订阅失败退出 | `rtc/client_sdk/rtc_client_sdk/src/Subscriber.cpp:513-519` |
 | ctrl 下行发送/广播 | `Publisher.cpp:427-467`；`SfuServer.cpp:1994-2131` |
 | ctrl 上游发送/窗口 | `Subscriber.cpp:178-219`（sourceSessionId==0 丢弃）；设置点 `:441, :545` |
 | ctrl 收发分发 | `Subscriber.cpp:224-242`；`Publisher.cpp:472-490, 728-736` |
-| 遥测聚合与注入数 | `OpenHD/.../mav_include.h:80-116`（≤1024B）；注入复制 `WBStreamTx.cpp:321` |
-| FEC 分组 | `libs/frame_protoc/src/types.h:14`；`protocol.h:17-18` |
-| 构建/NEON | `libs/frame_protoc/CMakeLists.txt:30-38` |
-| SFU 端口约定 | `server/sfu_server/SfuServer.h:115-121`（9200/9201/9202） |
-| 音频管线 | `OpenHD/OpenHD/ohd_video/src/gstaudiostream.cpp:110-145` |
+| 遥测聚合与注入数 | `apps/OpenHD/.../mav_include.h:80-116`（≤1024B）；注入复制 `WBStreamTx.cpp:321` |
+| FEC 分组 | `rtc/libs/frame_protoc/src/types.h:14`；`protocol.h:17-18` |
+| 构建/NEON | `rtc/libs/frame_protoc/CMakeLists.txt:30-38` |
+| SFU 端口约定 | `rtc/server/sfu_server/SfuServer.h:115-121`（9200/9201/9202） |
+| 音频管线 | `apps/OpenHD/OpenHD/ohd_video/src/gstaudiostream.cpp:110-145` |

@@ -259,7 +259,7 @@ Pacer 和 FEC 协同工作：
 
 完整的推流端示例见：
 - [main.mm](../mac_camera_push/main.mm) - 设置带宽
-- [Publisher.cpp](../../client_sdk/rtc_client_sdk/src/Publisher.cpp) - Pacer 集成
+- [Publisher.cpp](../../../rtc/client_sdk/rtc_client_sdk/src/Publisher.cpp) - Pacer 集成
 
 ## 许可证
 

@@ -2,7 +2,7 @@
 
 树莓派 4 专用 **air 端**：摄像头采集 + H.264 硬件编码 → tj_rtc 推流，同时桥接 Pixhawk 串口 MAVLink。
 
-由 `demos/raspberry_pi_pusher`（视频管线）与 `rtc_local_air`（MAVLink 桥）合并而来：
+由 `apps/demos/raspberry_pi_pusher`（视频管线）与 `rtc_local_air`（MAVLink 桥）合并而来：
 
 ```
  ┌───────────────────┐ YUV420 ┌──────────────────┐ H.264 ES ┌──────────────┐ NAL ┌──────────────┐
@@ -26,7 +26,7 @@ sudo apt install -y libcamera-dev libcamera-tools cmake g++ pkg-config
 在 tj_rtc 仓库内（有 libcamera 时顶层构建会自动带上本程序）：
 
 ```bash
-cmake -S demos/pi4_air -B demos/pi4_air/build && cmake --build demos/pi4_air/build -j4
+cmake -S apps/demos/pi4_air -B apps/demos/pi4_air/build && cmake --build apps/demos/pi4_air/build -j4
 ```
 
 > 采集/编码代码直接复用 `../raspberry_pi_pusher/src`（DmaHeap / LibcameraVideoSource /
@@ -36,7 +36,7 @@ cmake -S demos/pi4_air -B demos/pi4_air/build && cmake --build demos/pi4_air/bui
 ## 运行
 
 ```bash
-cd demos/pi4_air/build
+cd apps/demos/pi4_air/build
 ./pi4_air --stream openhd0 --user pi4_air
 ```
 
@@ -61,10 +61,13 @@ cd demos/pi4_air/build
 
 ```bash
 cd <tj_rtc 仓库根>
-for d in client_sdk common libs; do rsync -rc --exclude 'build/' $d/ pi4:~/tj_rtc/$d/; done
-rsync -rc --exclude 'build/' demos/raspberry_pi_pusher/ pi4:~/tj_rtc/demos/raspberry_pi_pusher/
-rsync -rc demos/pi4_air/ pi4:~/tj_rtc/demos/pi4_air/
+for d in client_sdk common libs; do rsync -rc --exclude 'build/' rtc/$d/ pi4:~/tj_rtc/$d/; done
+rsync -rc --exclude 'build/' apps/demos/raspberry_pi_pusher/ pi4:~/tj_rtc/demos/raspberry_pi_pusher/
+rsync -rc apps/demos/pi4_air/ pi4:~/tj_rtc/demos/pi4_air/
 ```
+
+> 远端 pi4 上的 `~/tj_rtc` 仍是重组前布局（本仓已改为 `rtc/` + `apps/demos/`），
+> 故 rsync 目标路径保持原样；下方 Pi 上构建/部署路径同样按设备现状书写。
 
 Pi 上构建（已验证通过）：
 

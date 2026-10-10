@@ -10,7 +10,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(X264 REQUIRED IMPORTED_TARGET x264)
 
 if(NOT TARGET rtc_client_sdk)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../client_sdk/rtc_client_sdk
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../rtc/client_sdk/rtc_client_sdk
                      ${CMAKE_BINARY_DIR}/rtc_client_sdk_build)
 endif()
 
