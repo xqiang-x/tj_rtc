@@ -612,8 +612,9 @@ void Publisher::CtrlRecvThreadFunc() {
                        (ctrlType == static_cast<uint8_t>(fec_protocol::MsgType::NACK) ||
                         ctrlType == static_cast<uint8_t>(fec_protocol::MsgType::STATS) ||
                         ctrlType == static_cast<uint8_t>(fec_protocol::MsgType::PONG) ||
-                        ctrlType == static_cast<uint8_t>(fec_protocol::MsgType::PLI))) {
-                // 服务器把 FEC 反馈（NACK/STATS/PONG/PLI）走 TCP 控制通道回传，
+                        ctrlType == static_cast<uint8_t>(fec_protocol::MsgType::PLI) ||
+                        ctrlType == static_cast<uint8_t>(fec_protocol::MsgType::RECV_REPORT))) {
+                // 服务器把 FEC 反馈（NACK/STATS/PONG/PLI/RECV_REPORT）走 TCP 控制通道回传，
                 // 规避运营商 NAT 周期性丢弃 UDP 入向映射导致的假断线循环
                 std::lock_guard<std::mutex> lk(m_senderMutex);
                 if (m_frameSender) {

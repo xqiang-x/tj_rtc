@@ -21,12 +21,13 @@ using FrameType = uint8_t;
 
 // Message type
 enum class MsgType : uint8_t {
-    DATA  = 0x01,
-    NACK  = 0x02,
-    STATS = 0x03,
-    PING  = 0x04,
-    PONG  = 0x05,
-    PLI   = 0x06,   // Picture Loss Indication: request a key frame
+    DATA        = 0x01,
+    NACK        = 0x02,
+    STATS       = 0x03,
+    PING        = 0x04,
+    PONG        = 0x05,
+    PLI         = 0x06,   // Picture Loss Indication: request a key frame
+    RECV_REPORT = 0x07,   // 接收端收包时间回报（带宽估计样本）
 };
 
 // TLV type identifiers
@@ -40,6 +41,7 @@ enum class TlvType : uint8_t {
     GOODPUT            = 0x12,   // 接收端实测有效吞吐（bps，4 字节 BE）
     TIMESTAMP          = 0x10,
     ECHO_TIMESTAMP     = 0x11,
+    RECV_TIME_BATCH    = 0x13,   // 一批收包时间记录（RECV_REPORT 负载，见 protocol.h）
 };
 
 // Predefined frame types
@@ -62,6 +64,12 @@ struct Frame {
 struct NackEntry {
     SeqNum lost_start_seq;
     uint32_t bitmask;
+};
+
+// Receive-time record for one DATA packet (RECV_REPORT payload element)
+struct RecvTimeEntry {
+    SeqNum   seq = 0;
+    uint64_t recv_time_ms = 0;   // 接收端单调时钟（毫秒）
 };
 
 // TLV item

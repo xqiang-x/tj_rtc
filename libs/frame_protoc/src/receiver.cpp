@@ -2,6 +2,8 @@
 #include "protocol.h"
 #include "cm256.h"
 #include <unordered_map>
+#include <unordered_set>
+#include <deque>
 #include <vector>
 #include <cstring>
 #include <algorithm>
@@ -150,6 +152,11 @@ struct FrameReceiver::Impl {
     };
     std::unordered_map<uint32_t, GroupLayout> group_layouts;
 
+    // 收包时间记录（RECV_REPORT，供发送端带宽估计）：按到达顺序追加，
+    // 随 STATS 周期整批排出。重复到达（重传）同一 seq 只记首次
+    std::deque<RecvTimeEntry> pending_recv_times;
+    std::unordered_set<SeqNum> pending_recv_seqs;
+
     Impl(const ReceiverConfig& cfg) : config(cfg) {}
 
     SeqNum nextCmdSeq() {
@@ -165,10 +172,31 @@ struct FrameReceiver::Impl {
         if (send_cb) send_cb(data, len);
     }
 
+    // 记录一个 DATA 包的到达时间（毫秒）。在陈旧帧过滤之前调用：
+    // 迟到/重复的包同样占用了下行带宽，应进入估计样本（seq 去重防重复计数）
+    void recordRecvTime(SeqNum seq, uint64_t now_us) {
+        if (pending_recv_seqs.find(seq) != pending_recv_seqs.end()) return;
+
+        // 容量保护：tick 长期未跑导致积压时，丢弃最旧记录（估计价值最低）
+        constexpr size_t kMaxPendingRecvTimes = 2048;
+        while (pending_recv_times.size() >= kMaxPendingRecvTimes) {
+            pending_recv_seqs.erase(pending_recv_times.front().seq);
+            pending_recv_times.pop_front();
+        }
+
+        RecvTimeEntry e;
+        e.seq = seq;
+        e.recv_time_ms = now_us / 1000;
+        pending_recv_times.push_back(e);
+        pending_recv_seqs.insert(seq);
+    }
+
     void handleData(const CommonHeader& hdr, const uint8_t* payload, size_t payload_len,
                     uint64_t now_us) {
         DataHeader data_hdr;
         if (!DataHeader::deserialize(payload, payload_len, data_hdr)) return;
+
+        recordRecvTime(hdr.seq_num, now_us);
 
         // 已交付或已超时丢弃的旧帧：其迟到的分块不再需要。
         // 按序提交下，游标之前的帧不可能还处于未完成状态——未完成的旧帧必然
@@ -784,6 +812,80 @@ struct FrameReceiver::Impl {
         sendPliPacket();
     }
 
+    // 收包时间回报（RECV_REPORT）：把待报记录按 seq 升序分批编码为
+    // RECV_TIME_BATCH TLV。单批 ≤60 条（TLV len 单字节上限），单包 ≤5 批
+    // （数据报 ~1.3KB 以内），超出则拆成多个 RECV_REPORT 包
+    void sendRecvReport() {
+        if (pending_recv_times.empty()) return;
+
+        constexpr size_t kMaxEntriesPerBatch = 60;
+        constexpr size_t kMaxBatchesPerPacket = 5;
+
+        // 到达顺序≈seq 序，但重传/乱序会破坏它；批次编码要求 seq 严格升序
+        std::vector<RecvTimeEntry> entries(pending_recv_times.begin(),
+                                           pending_recv_times.end());
+        pending_recv_times.clear();
+        pending_recv_seqs.clear();
+        std::sort(entries.begin(), entries.end(),
+                  [](const RecvTimeEntry& a, const RecvTimeEntry& b) {
+                      return a.seq < b.seq;
+                  });
+
+        size_t idx = 0;
+        while (idx < entries.size()) {
+            std::vector<TlvItem> items;
+            for (size_t b = 0; b < kMaxBatchesPerPacket && idx < entries.size(); ++b) {
+                // 贪心组批：条数达上限、或 seq/时间差值超出编码范围时提前截断
+                size_t end = idx + 1;
+                while (end < entries.size() && end - idx < kMaxEntriesPerBatch) {
+                    uint64_t seq_delta = entries[end].seq - entries[idx].seq;
+                    int64_t time_delta = static_cast<int64_t>(entries[end].recv_time_ms) -
+                                         static_cast<int64_t>(entries[idx].recv_time_ms);
+                    if (seq_delta > 0xFFFF ||
+                        time_delta < INT16_MIN || time_delta > INT16_MAX) break;
+                    ++end;
+                }
+
+                uint8_t value[256];
+                std::vector<RecvTimeEntry> batch(entries.begin() + static_cast<ptrdiff_t>(idx),
+                                                 entries.begin() + static_cast<ptrdiff_t>(end));
+                size_t n = serializeRecvTimeBatch(batch, value, sizeof(value));
+                idx = end;
+                if (n == 0) continue;
+
+                TlvItem item;
+                item.type = TlvType::RECV_TIME_BATCH;
+                item.value.assign(value, value + n);
+                items.push_back(std::move(item));
+            }
+            if (items.empty()) continue;
+
+            SeqNum seq = nextCmdSeq();
+            uint8_t seq_len = computeSeqLen(seq);
+            if (seq_len == 0) seq_len = 1;
+
+            size_t tlv_size = 0;
+            for (const auto& item : items) {
+                tlv_size += 2 + item.value.size();
+            }
+
+            std::vector<uint8_t> buf(commonHeaderSize(seq_len) + 2 + tlv_size);
+
+            CommonHeader hdr;
+            hdr.version = kProtocolVersion;
+            hdr.seq_len = seq_len;
+            hdr.msg_type = MsgType::RECV_REPORT;
+            hdr.seq_num = seq;
+
+            size_t offset = hdr.serialize(buf.data(), buf.size());
+            size_t written = serializeTlvPayload(items, buf.data() + offset,
+                                                 buf.size() - offset);
+            if (written > 0) {
+                sendPacket(buf.data(), offset + written);
+            }
+        }
+    }
+
     void sendStats(uint64_t now_us) {
         std::vector<TlvItem> items;
 
@@ -972,6 +1074,9 @@ void FrameReceiver::tick(uint64_t now_us) {
         impl_->stats.goodput_bps = static_cast<uint32_t>(
             impl_->goodput_window_bytes * 8 * 1000000ULL / elapsed_us);
         impl_->last_stats_send_us = now_us;
+
+        // 收包时间回报与 STATS 同周期（默认 1s，订阅端配置 300ms）
+        impl_->sendRecvReport();
 
         impl_->sendStats(now_us);
         impl_->resetWindow();

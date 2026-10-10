@@ -572,6 +572,11 @@ void ProxyFrameReceiver::onDownstreamPacket(const uint8_t* data, size_t len) {
         case MsgType::STATS:
             impl_->handleDownstreamStats(data, len);
             break;
+        case MsgType::RECV_REPORT:
+            // 收包时间回报原样转发到推流端（发送端带宽估计样本）
+            impl_->sendUpstream(data, len);
+            impl_->stats.recv_reports_forwarded_upstream++;
+            break;
         case MsgType::PLI:
             // 原样转发关键帧请求到推流端（服务器已做 500ms 节流）
             impl_->sendUpstream(data, len);

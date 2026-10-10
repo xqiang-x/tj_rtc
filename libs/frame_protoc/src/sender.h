@@ -2,6 +2,7 @@
 #include "types.h"
 #include "config.h"
 #include "stats.h"
+#include "bandwidth_estimator.h"
 #include <memory>
 
 namespace fec_protocol {
@@ -29,6 +30,11 @@ public:
     void setFecRatioAdjustCallback(FecRatioAdjustCallback cb);
     void setStatsCallback(StatsCallback cb);
     void setKeyFrameRequestCallback(KeyFrameRequestCallback cb);
+
+    // 注入自定义带宽估计函数（默认调用 bandwidth_estimator.h 的 estimateBandwidth）。
+    // 收到接收端 RECV_REPORT（收包时间回报）时，按批构造样本并调用该函数，
+    // 返回值 >0 时写入 stats.bandwidth_bps
+    void setBandwidthEstimator(BandwidthEstimator fn);
 
     // --- Core operations ---
 

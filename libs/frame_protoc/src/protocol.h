@@ -6,7 +6,7 @@
 *
 *   Version 4 bit   协议版本号，当前版本为 0x01
     SeqLen  4 bit   Sequence Number 字段的字节数，取值 1~8,根据Sequence Number 的增加而调整,比如小于0xff为1,0xff~0xffff为2,0xffff~0xffffff 为3 ....
-    Msg Type    1 byte  消息类型 (0x01 数据包, 0x02 命令包用于nack请求,0x03用于传递rtt\丢包率\fec恢复率\nack 恢复率,0x04用于心跳及探测rtt,0x05用于回复心跳及探测rtt,0x06关键帧请求PLI, 其他留作备用)
+    Msg Type    1 byte  消息类型 (0x01 数据包, 0x02 命令包用于nack请求,0x03用于传递rtt\丢包率\fec恢复率\nack 恢复率,0x04用于心跳及探测rtt,0x05用于回复心跳及探测rtt,0x06关键帧请求PLI, 0x07接收端收包时间回报(带宽估计), 其他留作备用)
     Sequence Number 1~8 byte    数据包或命令包各自的全局序号，从 1 开始递增，长度由 SeqLen 决定，大端序
 
     Msg Type为0x01时:
@@ -53,6 +53,18 @@
 
     Msg Type为0x06时(PLI 关键帧请求):
     Payload Length  16bit  固定为 0（当前无负载，保留 TLV 扩展能力）
+
+    Msg Type为0x07时(RECV_REPORT 接收端收包时间回报，用于发送端带宽估计):
+    Payload Length  16bit  当前包负载数据长度（字节）
+    负载为 1~N 个 TLV，type=0x13(RECV_TIME_BATCH)，每个 TLV 携带一批收包时间记录。
+    批次 value 编码（TLV len 为 1 字节，故单批 ≤ 60 条，value ≤ 253 字节）:
+    1byte  all count         本批记录条数 (1~60)
+    8byte  1st seq           第 1 个包的序号（大端序）
+    8byte  1st recv time ms  第 1 个包的接收时间（接收端单调时钟，毫秒，大端序）
+    之后每条记录 4 字节:
+    2byte  seq delta         本包序号 - 第 1 个包序号（无符号，条目按序号升序）
+    2byte  recv time delta   本包接收时间 - 第 1 个包接收时间（有符号 int16 毫秒，
+                             允许批内乱序到达产生的负差值）
  */
 namespace fec_protocol {
 
@@ -104,6 +116,15 @@ size_t serializeTlvPayload(const std::vector<TlvItem>& items,
                            uint8_t* buf, size_t buf_len);
 bool deserializeTlvPayload(const uint8_t* buf, size_t payload_len,
                            std::vector<TlvItem>& out);
+
+// RECV_TIME_BATCH value serialization (one batch of receive-time records).
+// Entries must be sorted by ascending seq; seq delta must fit in uint16 and
+// time delta (ms, signed) in int16. Max 60 entries per batch (value ≤ 253B).
+// Returns bytes written (17 + 4*(n-1)), or 0 on violation / buffer too small.
+size_t serializeRecvTimeBatch(const std::vector<RecvTimeEntry>& entries,
+                              uint8_t* buf, size_t buf_len);
+bool deserializeRecvTimeBatch(const uint8_t* buf, size_t buf_len,
+                              std::vector<RecvTimeEntry>& out);
 
 // Compute the minimum seq_len (bytes) needed to represent a sequence number.
 // seq == 0 → 0, seq <= 0xFF → 1, seq <= 0xFFFF → 2, ..., up to 8.

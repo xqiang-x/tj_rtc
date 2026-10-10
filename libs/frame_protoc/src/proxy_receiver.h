@@ -36,6 +36,7 @@ struct ProxyStats {
     uint64_t upstream_nack_recovered = 0;   // Missing seqs recovered after NACK
     uint64_t stats_forwarded_upstream = 0;  // Downstream STATS relayed upstream
     uint64_t pli_forwarded_upstream = 0;    // Downstream PLI relayed upstream
+    uint64_t recv_reports_forwarded_upstream = 0;  // Downstream RECV_REPORT relayed upstream
     uint64_t pongs_sent = 0;                // PONG replies to upstream PING
 };
 

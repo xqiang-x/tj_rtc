@@ -1546,6 +1546,136 @@ void test_adaptive_fec_formula() {
     PASS();
 }
 
+// Test: RECV_TIME_BATCH 序列化 roundtrip（含边界差值与非法输入拒绝）
+void test_recv_time_batch_serialization() {
+    TEST("RECV_TIME_BATCH serialization roundtrip");
+
+    // 单条目
+    {
+        std::vector<RecvTimeEntry> in = { {100, 123456789} };
+        uint8_t buf[256];
+        size_t n = serializeRecvTimeBatch(in, buf, sizeof(buf));
+        if (n != 17) { FAIL("single entry size != 17"); return; }
+        std::vector<RecvTimeEntry> out;
+        if (!deserializeRecvTimeBatch(buf, n, out)) { FAIL("single entry deserialize"); return; }
+        if (out.size() != 1 || out[0].seq != 100 || out[0].recv_time_ms != 123456789) {
+            FAIL("single entry mismatch"); return;
+        }
+    }
+
+    // 满批 60 条 + 正负时间差（批内乱序到达）
+    {
+        std::vector<RecvTimeEntry> in;
+        for (int i = 0; i < 60; ++i) {
+            RecvTimeEntry e;
+            e.seq = 1000 + static_cast<SeqNum>(i) * 1000;   // 最大差 59000 < 65535
+            e.recv_time_ms = 500000 + (i % 2 == 0 ? i * 100 : -i * 100);
+            in.push_back(e);
+        }
+        uint8_t buf[256];
+        size_t n = serializeRecvTimeBatch(in, buf, sizeof(buf));
+        if (n != 17 + 4 * 59) { FAIL("60-entry size wrong"); return; }
+        std::vector<RecvTimeEntry> out;
+        if (!deserializeRecvTimeBatch(buf, n, out)) { FAIL("60-entry deserialize"); return; }
+        if (out.size() != 60) { FAIL("60-entry count mismatch"); return; }
+        for (int i = 0; i < 60; ++i) {
+            if (out[i].seq != in[i].seq || out[i].recv_time_ms != in[i].recv_time_ms) {
+                FAIL("60-entry content mismatch at " + std::to_string(i)); return;
+            }
+        }
+    }
+
+    // 拒绝项：61 条 / seq 乱序 / seq 差溢出 / 时间差溢出 / 缓冲区不足 / 截断
+    {
+        uint8_t buf[512];
+        std::vector<RecvTimeEntry> in61(61);
+        for (int i = 0; i < 61; ++i) { in61[i].seq = i + 1; in61[i].recv_time_ms = i; }
+        if (serializeRecvTimeBatch(in61, buf, sizeof(buf)) != 0) { FAIL("61 entries accepted"); return; }
+
+        std::vector<RecvTimeEntry> unsorted = { {5, 100}, {3, 200} };
+        if (serializeRecvTimeBatch(unsorted, buf, sizeof(buf)) != 0) { FAIL("unsorted accepted"); return; }
+
+        std::vector<RecvTimeEntry> big_seq = { {1, 100}, {70000, 200} };
+        if (serializeRecvTimeBatch(big_seq, buf, sizeof(buf)) != 0) { FAIL("seq delta overflow accepted"); return; }
+
+        std::vector<RecvTimeEntry> big_time = { {1, 100}, {2, 100 + 40000} };
+        if (serializeRecvTimeBatch(big_time, buf, sizeof(buf)) != 0) { FAIL("time delta overflow accepted"); return; }
+
+        std::vector<RecvTimeEntry> ok = { {1, 100}, {2, 150} };
+        if (serializeRecvTimeBatch(ok, buf, 20) != 0) { FAIL("small buffer accepted"); return; }
+
+        size_t n = serializeRecvTimeBatch(ok, buf, sizeof(buf));
+        std::vector<RecvTimeEntry> out;
+        if (deserializeRecvTimeBatch(buf, n - 1, out)) { FAIL("truncated accepted"); return; }
+    }
+
+    PASS();
+}
+
+// Test: 收包时间回报端到端（DATA → 接收端记录 → RECV_REPORT → 发送端匹配样本 → 估计函数）
+void test_recv_report_end_to_end() {
+    TEST("RECV_REPORT end-to-end (recv times → sender samples)");
+
+    SenderConfig sender_cfg;
+    sender_cfg.mtu = 1400;
+    sender_cfg.fec_ratio = 0.0f;   // 仅数据包，样本数可预期
+
+    ReceiverConfig receiver_cfg;
+    receiver_cfg.stats_interval_ms = 100;
+
+    FrameSender sender(sender_cfg);
+    FrameReceiver receiver(receiver_cfg);
+
+    uint64_t send_clock_us = 1'000'000;     // 发送端时钟
+    uint64_t recv_clock_us = 500'000'000;   // 接收端时钟（异域，仅批内差值有效）
+
+    std::vector<BwSample> estimated;
+    sender.setBandwidthEstimator([&](const std::vector<BwSample>& samples) -> uint32_t {
+        estimated = samples;
+        return 8'000'000;   // 非 0：验证估计值写入 stats.bandwidth_bps
+    });
+
+    sender.setSendCallback([&](const uint8_t* data, size_t len) {
+        recv_clock_us += 1000;   // 每包飞行 1ms
+        receiver.onPacketReceived(data, len, recv_clock_us);
+    });
+    receiver.setSendCallback([&](const uint8_t* data, size_t len) {
+        sender.onPacketReceived(data, len, send_clock_us);
+    });
+    receiver.setFrameReadyCallback([](Frame&&) {});
+
+    std::vector<uint8_t> test_data(3000, 0xCD);   // → 3 个数据包
+    if (!sender.sendFrame(test_data.data(), test_data.size(), frame_type::VIDEO,
+                          send_clock_us)) {
+        FAIL("sendFrame failed"); return;
+    }
+    send_clock_us += 30'000;
+
+    // 推进接收端时钟并 tick：随 STATS 周期发出 RECV_REPORT
+    recv_clock_us += 200'000;
+    receiver.tick(recv_clock_us);
+
+    if (estimated.size() != 3) {
+        FAIL("expected 3 samples, got " + std::to_string(estimated.size())); return;
+    }
+    for (size_t i = 0; i < estimated.size(); ++i) {
+        const BwSample& s = estimated[i];
+        if (s.seq != i + 1) { FAIL("sample seq mismatch"); return; }
+        if (s.packet_size == 0) { FAIL("sample packet_size is 0"); return; }
+        if (s.send_time_us != send_clock_us - 30'000) { FAIL("sample send_time mismatch"); return; }
+        if (s.recv_time_ms == 0) { FAIL("sample recv_time is 0"); return; }
+    }
+    // 接收时间逐包 +1ms
+    if (estimated[2].recv_time_ms - estimated[0].recv_time_ms != 2) {
+        FAIL("recv time delta wrong"); return;
+    }
+    if (sender.getStats().bandwidth_bps != 8'000'000) {
+        FAIL("bandwidth_bps not updated from estimator result"); return;
+    }
+
+    PASS();
+}
+
 int main() {
     std::cout << "=== FEC Protocol Tests ===" << std::endl;
     std::cout << std::endl;
@@ -1567,6 +1697,8 @@ int main() {
     test_ping_pong();
     test_ping_interval_frequent_ticks();
     test_stats();
+    test_recv_time_batch_serialization();
+    test_recv_report_end_to_end();
     test_bitrate_controller();
     test_pli_on_frame_drop();
     test_pli_client_throttle();

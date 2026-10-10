@@ -34,6 +34,7 @@ add_library(rtc_native SHARED
     ${FRAME_PROTOC_DIR}/src/receiver.cpp
     ${FRAME_PROTOC_DIR}/src/proxy_receiver.cpp
     ${FRAME_PROTOC_DIR}/src/bitrate_controller.cpp
+    ${FRAME_PROTOC_DIR}/src/bandwidth_estimator.cpp
     ${FRAME_PROTOC_DIR}/cm256cc/gf256.cpp
     ${FRAME_PROTOC_DIR}/cm256cc/cm256.cpp
 

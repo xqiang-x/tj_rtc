@@ -16,6 +16,15 @@ struct CachedBlock {
     uint8_t retry_count;
 };
 
+// 向网络发包的时间记录（独立于重传缓存）：RECV_REPORT 到达后按 seq 匹配
+// 带宽估计样本。缓存会随 completed_seq 推进被提前清掉，而回报滞后最多一个
+// 统计周期，故单独保留：按时间（复用 cache_timeout_ms）与容量上限清理
+struct SendTimeRecord {
+    uint64_t send_time_us = 0;        // 首次发送时间
+    uint64_t last_retransmit_us = 0;  // 最近一次重传时间（0 = 未重传）
+    uint16_t packet_size = 0;         // 整包长度（字节，含协议头）
+};
+
 struct FrameSender::Impl {
     SenderConfig config;
     SendPacketCallback send_cb;
@@ -37,6 +46,12 @@ struct FrameSender::Impl {
 
     // Retransmission cache: data_seq -> cached block (ordered by seq)
     std::map<SeqNum, CachedBlock> cache;
+
+    // seq -> 向网络发包时间记录（带宽估计样本匹配用，见 SendTimeRecord）
+    std::map<SeqNum, SendTimeRecord> send_time_records;
+
+    // 带宽估计函数（未注入时默认调用 bandwidth_estimator.cpp 的 estimateBandwidth）
+    BandwidthEstimator bw_estimator;
 
     // PING state
     uint64_t last_ping_time_us = 0;
@@ -187,6 +202,7 @@ struct FrameSender::Impl {
 
         sendPacket(block.packet.data(), block.packet.size());
         stats.blocks_sent++;
+        recordRetransmitTime(seq, now_us);
         return true;
     }
 
@@ -267,6 +283,76 @@ struct FrameSender::Impl {
             cache.erase(it);
         }
     }
+
+    static constexpr size_t kMaxSendTimeRecords = 16384;
+
+    void recordSendTime(SeqNum seq, uint64_t now_us, size_t packet_size) {
+        SendTimeRecord& rec = send_time_records[seq];
+        rec.send_time_us = now_us;
+        rec.last_retransmit_us = 0;
+        rec.packet_size = static_cast<uint16_t>(packet_size);
+        // 容量保护：seq 单调递增，map 前端即最旧记录
+        while (send_time_records.size() > kMaxSendTimeRecords) {
+            send_time_records.erase(send_time_records.begin());
+        }
+    }
+
+    void recordRetransmitTime(SeqNum seq, uint64_t now_us) {
+        auto it = send_time_records.find(seq);
+        if (it != send_time_records.end()) {
+            it->second.last_retransmit_us = now_us;
+        }
+    }
+
+    void cleanupSendTimeRecords(uint64_t now_us) {
+        uint64_t timeout_us = static_cast<uint64_t>(config.cache_timeout_ms) * 1000;
+        while (!send_time_records.empty()) {
+            const SendTimeRecord& rec = send_time_records.begin()->second;
+            uint64_t last = (rec.last_retransmit_us > 0) ? rec.last_retransmit_us
+                                                         : rec.send_time_us;
+            if (now_us - last <= timeout_us) break;
+            send_time_records.erase(send_time_records.begin());
+        }
+    }
+
+    // RECV_REPORT（收包时间回报）：每批按 seq 匹配发送时间构成样本，
+    // 调用带宽估计函数；估计值 >0 时写入 stats.bandwidth_bps
+    void handleRecvReport(const uint8_t* payload, size_t payload_len) {
+        std::vector<TlvItem> items;
+        if (!deserializeTlvPayload(payload, payload_len, items)) return;
+
+        for (const auto& item : items) {
+            if (item.type != TlvType::RECV_TIME_BATCH) continue;
+
+            std::vector<RecvTimeEntry> entries;
+            if (!deserializeRecvTimeBatch(item.value.data(), item.value.size(),
+                                          entries)) {
+                continue;
+            }
+
+            // 发送时间记录已被清理（超出保留窗口）→ 跳过该样本
+            std::vector<BwSample> samples;
+            samples.reserve(entries.size());
+            for (const auto& e : entries) {
+                auto it = send_time_records.find(e.seq);
+                if (it == send_time_records.end()) continue;
+                BwSample s;
+                s.seq = e.seq;
+                // 重传过的包：到达对应的是最近一次向网络发送
+                s.send_time_us = (it->second.last_retransmit_us > 0)
+                               ? it->second.last_retransmit_us
+                               : it->second.send_time_us;
+                s.recv_time_ms = e.recv_time_ms;
+                s.packet_size = it->second.packet_size;
+                samples.push_back(s);
+            }
+            if (samples.empty()) continue;
+
+            uint32_t bps = bw_estimator ? bw_estimator(samples)
+                                        : estimateBandwidth(samples);
+            if (bps > 0) stats.bandwidth_bps = bps;
+        }
+    }
 };
 
 FrameSender::FrameSender(const SenderConfig& config)
@@ -288,6 +374,10 @@ void FrameSender::setStatsCallback(StatsCallback cb) {
 
 void FrameSender::setKeyFrameRequestCallback(KeyFrameRequestCallback cb) {
     impl_->key_frame_request_cb = std::move(cb);
+}
+
+void FrameSender::setBandwidthEstimator(BandwidthEstimator fn) {
+    impl_->bw_estimator = std::move(fn);
 }
 
 bool FrameSender::sendFrame(const uint8_t* data, size_t len, FrameType type, uint64_t now_us) {
@@ -465,6 +555,7 @@ bool FrameSender::sendFrame(const uint8_t* data, size_t len, FrameType type, uin
             // Send from the cached buffer
             impl_->sendPacket(packet, packet_size);
             impl_->stats.blocks_sent++;
+            impl_->recordSendTime(seq, now_us, packet_size);
         }
     }
 
@@ -492,6 +583,9 @@ void FrameSender::onPacketReceived(const uint8_t* data, size_t len, uint64_t now
         case MsgType::STATS:
             impl_->handleStats(payload, payload_len);
             break;
+        case MsgType::RECV_REPORT:
+            impl_->handleRecvReport(payload, payload_len);
+            break;
         case MsgType::PLI:
             if (impl_->key_frame_request_cb) {
                 impl_->key_frame_request_cb();
@@ -515,6 +609,7 @@ void FrameSender::tick(uint64_t now_us) {
 
     // Cleanup expired cache
     impl_->cleanupExpiredCache(now_us);
+    impl_->cleanupSendTimeRecords(now_us);
 
     // FEC ratio adjustment：优先用外部回调，否则自动按丢包率计算（1.5 倍丢包率），
     // 最终一律 clamp 到 [fec_ratio_min, fec_ratio_max]；自动模式仅在收到过

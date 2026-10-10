@@ -16,6 +16,7 @@ add_library(frame_protoc STATIC
     src/receiver.cpp
     src/proxy_receiver.cpp
     src/bitrate_controller.cpp
+    src/bandwidth_estimator.cpp
     cm256cc/cm256.cpp
     cm256cc/gf256.cpp
 )

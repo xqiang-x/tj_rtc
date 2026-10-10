@@ -1050,11 +1050,13 @@ void SfuServerFull::HandleStreamData(ConnInfo* conn, const uint8_t* data, size_t
             std::chrono::steady_clock::now().time_since_epoch()).count();
 
         // Route by FEC message type (payload[1] = CommonHeader.msg_type):
-        // NACK/STATS/PLI come from downstream pull clients (wrapped with publisher's
-        // sessionId so they get routed here); DATA comes from the upstream publisher.
+        // NACK/STATS/PLI/RECV_REPORT come from downstream pull clients (wrapped with
+        // publisher's sessionId so they get routed here); DATA comes from the
+        // upstream publisher.
         uint8_t fec_msg_type = (sd.payloadLen >= 2) ? sd.payload[1] : 0;
         if (fec_msg_type == static_cast<uint8_t>(fec_protocol::MsgType::NACK) ||
-            fec_msg_type == static_cast<uint8_t>(fec_protocol::MsgType::STATS)) {
+            fec_msg_type == static_cast<uint8_t>(fec_protocol::MsgType::STATS) ||
+            fec_msg_type == static_cast<uint8_t>(fec_protocol::MsgType::RECV_REPORT)) {
             source_session->proxy_receiver->onDownstreamPacket(sd.payload, sd.payloadLen);
         } else if (fec_msg_type == static_cast<uint8_t>(fec_protocol::MsgType::PLI)) {
             // PLI 节流：每个推流端最多 500ms 向上游转发一个关键帧请求

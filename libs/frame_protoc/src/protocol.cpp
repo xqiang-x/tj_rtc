@@ -268,5 +268,72 @@ bool deserializeTlvPayload(const uint8_t* buf, size_t buf_len,
     return true;
 }
 
+// --- RECV_TIME_BATCH value (RECV_REPORT 负载中的一批收包时间记录) ---
+
+// TLV len 为 1 字节（value ≤ 255），头部 17B + 每条 4B → 单批最多 60 条
+static constexpr size_t kMaxRecvTimeBatchEntries = 60;
+static constexpr size_t kRecvTimeBatchHeaderSize = 17;  // count(1) + seq(8) + recv_ms(8)
+
+size_t serializeRecvTimeBatch(const std::vector<RecvTimeEntry>& entries,
+                              uint8_t* buf, size_t buf_len) {
+    size_t n = entries.size();
+    if (n == 0 || n > kMaxRecvTimeBatchEntries) return 0;
+
+    size_t total = kRecvTimeBatchHeaderSize + 4 * (n - 1);
+    if (buf_len < total) return 0;
+
+    const RecvTimeEntry& base = entries[0];
+    buf[0] = static_cast<uint8_t>(n);
+    writeBE64(buf + 1, base.seq);
+    writeBE64(buf + 9, base.recv_time_ms);
+
+    size_t offset = kRecvTimeBatchHeaderSize;
+    for (size_t i = 1; i < n; ++i) {
+        // 条目须按 seq 严格升序（差值以无符号 16bit 编码）
+        if (entries[i].seq <= entries[i - 1].seq) return 0;
+        uint64_t seq_delta = entries[i].seq - base.seq;
+        if (seq_delta > 0xFFFF) return 0;
+        // 时间差按有符号 int16 毫秒编码：批内乱序到达时可为负
+        int64_t time_delta = static_cast<int64_t>(entries[i].recv_time_ms) -
+                             static_cast<int64_t>(base.recv_time_ms);
+        if (time_delta < INT16_MIN || time_delta > INT16_MAX) return 0;
+        writeBE16(buf + offset, static_cast<uint16_t>(seq_delta));
+        writeBE16(buf + offset + 2, static_cast<uint16_t>(static_cast<int16_t>(time_delta)));
+        offset += 4;
+    }
+    return total;
+}
+
+bool deserializeRecvTimeBatch(const uint8_t* buf, size_t buf_len,
+                              std::vector<RecvTimeEntry>& out) {
+    if (buf_len < kRecvTimeBatchHeaderSize) return false;
+
+    uint8_t count = buf[0];
+    if (count == 0 || count > kMaxRecvTimeBatchEntries) return false;
+
+    size_t total = kRecvTimeBatchHeaderSize + 4 * (static_cast<size_t>(count) - 1);
+    if (buf_len < total) return false;
+
+    RecvTimeEntry base;
+    base.seq = readBE64(buf + 1);
+    base.recv_time_ms = readBE64(buf + 9);
+
+    out.clear();
+    out.reserve(count);
+    out.push_back(base);
+
+    size_t offset = kRecvTimeBatchHeaderSize;
+    for (uint8_t i = 1; i < count; ++i) {
+        RecvTimeEntry e;
+        e.seq = base.seq + readBE16(buf + offset);
+        int64_t t = static_cast<int64_t>(base.recv_time_ms) +
+                    static_cast<int16_t>(readBE16(buf + offset + 2));
+        e.recv_time_ms = (t > 0) ? static_cast<uint64_t>(t) : 0;
+        offset += 4;
+        out.push_back(e);
+    }
+    return true;
+}
+
 } // namespace fec_protocol
 
