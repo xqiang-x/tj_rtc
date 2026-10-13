@@ -26,7 +26,7 @@ app 后已出画（解码 31fps、`yuv upload glErr=0`、链路 loss 0%）。
 > SFU 组帧（FrameAssembler）+ UDS Frame IPC + `moq_gateway --wt` + 浏览器 Web demo
 > 全链路本机验证通过（详见 §4.13–4.18；全程未触碰生产流 openhd0 / pi4_air）。
 
-## 2. 代码提交状态（feature/wq，均未推送 GitHub）
+## 2. 代码提交状态（feature/wq，均未推送 GitHub；xquic 是例外，已推 fork）
 
 | 仓库 | HEAD | 内容 | 基线 |
 |---|---|---|---|
@@ -39,7 +39,7 @@ app 后已出画（解码 31fps、`yuv upload glErr=0`、链路 loss 0%）。
 | tj_rtc | `5ef54bc` | 目录重组：rtc/ + apps/ + docs/ 分离（纯移动 + 路径适配） | — |
 | tj_rtc | `83f99a9` | SFU 组帧 FrameAssembler + Frame IPC（FrameDispatcher/`--frame-ipc`） | — |
 | tj_rtc | `ba91fcd` | 新增 demos/moq_web（MoQ over WebTransport 网页播放 demo） | — |
-| tj_rtc | （本提交） | MoQ 项目文档：PROGRESS/计划/构建脚本（阶段 A–F 收尾） | — |
+| tj_rtc | `f321ebd` | MoQ 项目文档：PROGRESS/计划/构建脚本（阶段 A–F 收尾） | — |
 | OpenHD | `eca5ace2` | air 端 RTC 链路（RtcLink/RTP-ES/rtc 配置/探针） | `f07729b3` |
 | QOpenHD | `3d97fea3d` | 客户端接入（app/rtc、Plan B YUV、上行 MAVLink） | `6dd753d73` |
 
@@ -48,9 +48,9 @@ app 后已出画（解码 31fps、`yuv upload glErr=0`、链路 loss 0%）。
   - `apps/QOpenHD` → https://github.com/xqiang-x/QOpenHD.git @ `3d97fea3d`（heads/feature/wq）
 - **xquic 为嵌套独立仓库**（`rtc/libs/xquic`，fork https://github.com/xqiang-x/xquic.git，
   分支 `dev/moq_gateway`；tj_rtc 未跟踪该目录，克隆主仓后需单独获取）：
-  `f4cf0dc`（MoQ 构建 profile）、`8187553`（MoQ 网关 IPC 中继）已推 fork；
-  `fd47c05`（WebTransport over h3 + stock Chrome draft-02 兼容，阶段 E/F）**未推**；
-  draft PR #1 待随 `fd47c05` 更新。
+  `f4cf0dc`（MoQ 构建 profile）、`8187553`（MoQ 网关 IPC 中继）、`fd47c05`（WebTransport
+  over h3 + stock Chrome draft-02 兼容，阶段 E/F）**均已推 fork**；draft PR #1 标题/正文
+  已更新为累计变更描述（2026-10-13）。
 - **推送顺序（重要）**：OpenHD → QOpenHD → tj_rtc。子模块 commit 未推的话，
   别人克隆 tj_rtc 时 `submodule update` 会找不到提交。
 - **子模块内未提交（目录重组适配，2026-10-10）**：`apps/QOpenHD/app/rtc/rtc.pri`
@@ -517,7 +517,7 @@ nohup setsid ./pi4_air --stream openhd0 --user pi4_air > ~/tj_rtc/pi4_air.log 2>
 - 调试经验：手工拼测试 URL 时指纹参数必须 URL 编码（base64 的 `+` 要写 `%2B`，
   否则 `URLSearchParams` 解成空格、页面 `atob` 报 "not correctly encoded"）；
   `run_demo.sh` 内部走 `urlencode`，输出 URL 已正确。
-- 下一步（待用户决策）：xquic `fd47c05` 推送 fork + draft PR #1 更新；
+- 下一步（已完成）：xquic `fd47c05` 已推 fork、draft PR #1 已更新标题/正文（2026-10-13）；
   主仓库推送（feature/wq）；生产链路接入（远端 SFU 106.15.177.248 需部署带
   `--frame-ipc` 的新版 `sfu_server_full`，**需用户确认后执行**）。
 
@@ -542,8 +542,9 @@ nohup setsid ./pi4_air --stream openhd0 --user pi4_air > ~/tj_rtc/pi4_air.log 2>
 
 1. **推送 GitHub**（顺序 OpenHD → QOpenHD → tj_rtc），推送后核对 `.gitmodules` URL 可克隆性。
    待推新增：tj_rtc 的 `ac79d2a`（RECV_REPORT）、`86d46cf`（pi4_air）、`6c86652`（jetson）、
-   `5ef54bc`（重组）、`83f99a9`（SFU 组帧+IPC）、`ba91fcd`（moq_web）与本提交；
-   xquic（嵌套仓库）`fd47c05` 推 fork 并更新 draft PR #1；子模块内目录适配改动建议
+   `5ef54bc`（重组）、`83f99a9`（SFU 组帧+IPC）、`ba91fcd`（moq_web）、`f321ebd`（MoQ 文档）
+   及本次文档修正提交；
+   xquic（嵌套仓库）`fd47c05` 已推 fork、draft PR #1 已更新（2026-10-13）；子模块内目录适配改动建议
    先在各自 feature/wq 提交再推。
 2. **pi4 air 已首跑出画（2026-09-23）**；剩余：**Pixhawk 插到 pi 后验证串口桥**
    （pi4 日志 `serial=OK`、`mav_tx/hb` 增长；手机上行 `up_write` 增长）；长稳观察。
