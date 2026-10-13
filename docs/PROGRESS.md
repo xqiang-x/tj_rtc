@@ -1,6 +1,6 @@
 # OpenHD RTC 链路 — 进展与现场记录
 
-> 最后更新：2026-10-10
+> 最后更新：2026-10-13
 > 用途：记录当前成果、现场环境与待办，供下次继续。协议/架构细节见 `openhd_rtc_link_design.md`（设计文档）。
 > 规则：每到重大节点（环境切换、修复合并、联调结果）更新本文件。
 
@@ -22,6 +22,10 @@ pi4 专用 air 程序 `apps/demos/pi4_air`（pi4 上副本仍在旧路径 `demos
 gst 源已停，**pi4_air 正在 pi4（192.168.50.114）运行并推 openhd0**，手机（Redmi）重启
 app 后已出画（解码 31fps、`yuv upload glErr=0`、链路 loss 0%）。
 
+> MoQ 支线（计划 v3，`docs/moq_frame_assembly_plan.md`）阶段 A–F 完成（2026-10-13）：
+> SFU 组帧（FrameAssembler）+ UDS Frame IPC + `moq_gateway --wt` + 浏览器 Web demo
+> 全链路本机验证通过（详见 §4.13–4.18；全程未触碰生产流 openhd0 / pi4_air）。
+
 ## 2. 代码提交状态（feature/wq，均未推送 GitHub）
 
 | 仓库 | HEAD | 内容 | 基线 |
@@ -32,13 +36,21 @@ app 后已出画（解码 31fps、`yuv upload glErr=0`、链路 loss 0%）。
 | tj_rtc | `ac79d2a` | RECV_REPORT 收包时间回报链路（带宽估计脚手架，算法待实现） | — |
 | tj_rtc | `86d46cf` | 新增 demos/pi4_air（pi4 专用 air 端） | — |
 | tj_rtc | `6c86652` | 新增 demos/jetson_camera_push（Jetson NVENC 推流） | — |
-| tj_rtc | （本次重组提交） | 目录重组：rtc/ + apps/ + docs/ 分离（纯移动 + 路径适配） | — |
+| tj_rtc | `5ef54bc` | 目录重组：rtc/ + apps/ + docs/ 分离（纯移动 + 路径适配） | — |
+| tj_rtc | `83f99a9` | SFU 组帧 FrameAssembler + Frame IPC（FrameDispatcher/`--frame-ipc`） | — |
+| tj_rtc | `ba91fcd` | 新增 demos/moq_web（MoQ over WebTransport 网页播放 demo） | — |
+| tj_rtc | （本提交） | MoQ 项目文档：PROGRESS/计划/构建脚本（阶段 A–F 收尾） | — |
 | OpenHD | `eca5ace2` | air 端 RTC 链路（RtcLink/RTP-ES/rtc 配置/探针） | `f07729b3` |
 | QOpenHD | `3d97fea3d` | 客户端接入（app/rtc、Plan B YUV、上行 MAVLink） | `6dd753d73` |
 
 - 子模块（tj_rtc `.gitmodules`，重组后位于 `apps/` 下）：
   - `apps/OpenHD` → https://github.com/xqiang-x/OpenHD.git @ `eca5ace2`（heads/feature/wq）
   - `apps/QOpenHD` → https://github.com/xqiang-x/QOpenHD.git @ `3d97fea3d`（heads/feature/wq）
+- **xquic 为嵌套独立仓库**（`rtc/libs/xquic`，fork https://github.com/xqiang-x/xquic.git，
+  分支 `dev/moq_gateway`；tj_rtc 未跟踪该目录，克隆主仓后需单独获取）：
+  `f4cf0dc`（MoQ 构建 profile）、`8187553`（MoQ 网关 IPC 中继）已推 fork；
+  `fd47c05`（WebTransport over h3 + stock Chrome draft-02 兼容，阶段 E/F）**未推**；
+  draft PR #1 待随 `fd47c05` 更新。
 - **推送顺序（重要）**：OpenHD → QOpenHD → tj_rtc。子模块 commit 未推的话，
   别人克隆 tj_rtc 时 `submodule update` 会找不到提交。
 - **子模块内未提交（目录重组适配，2026-10-10）**：`apps/QOpenHD/app/rtc/rtc.pri`
@@ -273,6 +285,242 @@ nohup setsid ./pi4_air --stream openhd0 --user pi4_air > ~/tj_rtc/pi4_air.log 2>
   二者不能同时开；PWM 驱动走 Jetson.GPIO/40-pin pin32/33（见 4.11）。
 - 入口：`source ~/env/bin/activate && cd ~/mycar && python manage.py drive`。
 
+### 4.13 MoQ 网关项目（计划 v3，见 `docs/moq_frame_assembly_plan.md`）阶段 A 完成（2026-10-12）
+
+- 决策回顾（用户确认）：MoQ 集成 = 独立进程网关 + UDS IPC；Web 演示 = 先补齐 WebTransport；
+  复用 `rtc/libs/xquic`（含 moq/ 源码与 demo），不用独立 MoQ 库。
+- 阶段 A（xquic MoQ 构建打通 + 演示对跑）成果：
+  - xquic 仓库（`rtc/libs/xquic`，fork `xqiang-x/xquic`，分支 `dev/moq_gateway`）：根 CMakeLists
+    补声明 `option(XQC_ENABLE_MOQ ... OFF)`（原 `if(XQC_ENABLE_MOQ)` 依赖未声明变量）+ harness
+    manifest 新增 `moq` 模块/feature profile（`--feature moq` → `-DXQC_ENABLE_MOQ=1`）。提交
+    `f4cf0dc`。完整单测门（`./scripts/validate.sh test --feature moq`）通过：CUnit 270/270、
+    `validation level 'test' passed`。已推 fork 并建 **draft PR #1**（fork 上不跑 CI：Build 工作流
+    用上游 self-hosted runner）。
+  - 本机构建环境：boringssl 就绪（新增 `scripts/build_boringssl.sh`，产出
+    `third_party/boringssl/build/libssl.a libcrypto.a`）；CUnit 装到用户空间 `~/.local/cunit`
+    （无 sudo，`apt-get download` 解包）。构建环境变量（必须）：
+    `CMAKE_SYSTEM_IGNORE_PATH=/usr/local`（绕过 `/usr/local/include/event.h` 孤立污染）+
+    `CMAKE_PREFIX_PATH=/usr:/home/ubuntu/.local/cunit`（**Linux 下 env 的 prefix path 用 `:` 分隔，
+    用 `;` 会被当成单一路径**）。CMake 缓存粘滞：报错找不到时先清 `build/validation`。
+  - 演示对跑（`build/validation/moq/demo/`，pub/sub 300 帧）：交付 300/300；PLI 闭环生效
+    （seq3 DELTA 触发请求 → seq4 KEY）；`conn_err=0`、零 `[error]`。运行方式：在 build/validation
+    下执行（证书 slog/clog 均相对 CWD）。
+- 计划偏差（已处理）：A2 原拟自建 `rtc/libs/xquic/build.sh` —— **未采用**，统一走官方
+  `./scripts/validate.sh build|test --feature moq`（遵循仓库 xquic-build skill 约束，禁止手写 cmake
+  入口；manifest feature 机制即官方扩展点）。
+- 下一步：阶段 B（SFU 服务器组帧 FrameAssembler，`rtc/libs/frame_protoc/`）。
+
+### 4.14 MoQ 网关项目阶段 B 完成：SFU 服务器组帧（FrameAssembler，2026-10-12）
+
+- 交付物（主仓库，已提交 `83f99a9`，与阶段 C 同提交）：
+  - `rtc/libs/frame_protoc/src/frame_assembler.{h,cpp}`：只读轻量组帧器，复用 receiver.cpp 的
+    FEC 解码内核（组状态/cm256 decode）、按序提交游标、帧超时丢弃与 pending 淘汰；剥离
+    NACK/STATS/PING/PONG/PLI 等一切回包副作用，仅消费 `MsgType::DATA`。接口
+    `onDataPacket(data,len,now_us)` + `setFrameReadyCallback` + `tick`。
+  - `rtc/server/sfu_server/SfuServer.{h,cpp}`：UDP 推流会话（proxy_receiver 同处）懒创建
+    FrameAssembler；`HandleStreamData` proxy 分支内并行投喂 DATA（只读，包序/FEC 过滤/NACK
+    语义零改动）；统计链路：PrintProxyStats 每流一行
+    `Assembler[stream]: assembled/kbps/pending/timeouts/evicted` + summary 行；
+    AdjustProxyFecRatio 日志附组帧观测值。
+  - `rtc/server/sfu_test/test_frame_assembler.cpp`（新测试目标）：5 用例 = 无丢失组帧 /
+    FEC 恢复 / 超时丢弃+游标推进 / 乱序到达按帧序交付 / 非 DATA 与陈旧包零副作用。
+- 验证（全部通过）：
+  - `test_frame_assembler` 5/5；回归 `fec_test` 25/25、`cm256_test`、`test_server`、
+    `test_integration`（Overall PASS）、`test_e2e`（Overall PASS）。
+  - 本机 UDP 冒烟（未触碰 pi4_air；独立端口 9300/9301 + 独立流名 sim_asm_smoke）：
+    `sfu_server_full -p 9300 -u 9301` + `sim_pusher`（127.0.0.1，10s@30fps）→
+    `[SFU-ASSEMBLER] initialized` / `Assembler[sim_asm_smoke]: assembled≈311 kbps≈747
+    pending=0 timeouts=0`（推流 ~315 帧，全部组帧成功）；proxy 转发统计（Received/Forwarded/
+    PONG）不受影响。sim_pusher 独立构建方法：`cmake -S apps/demos/sim_pusher -B build_sim_pusher`。
+- 本机构建速查：`cmake -S . -B build -DBUILD_DEMOS=OFF -DBUILD_SDK=OFF` + 
+  `cmake --build build -j --target sfu_server_full test_frame_assembler fec_test`（可执行输出 `build/bin/`）。
+- 下一步：阶段 C（IPC + FrameDispatcher，`rtc/common/sfu_protocol/FrameIpc.h` +
+  `rtc/server/sfu_server/FrameDispatcher.{h,cpp}` + `main.cpp --frame-ipc`）。
+
+### 4.15 MoQ 网关项目阶段 C 完成：IPC + FrameDispatcher（2026-10-12）
+
+- 交付物（主仓库，已提交 `83f99a9`）：
+  - `rtc/common/sfu_protocol/FrameIpc.h`：SFU ↔ MoQ 网关 UDS 二进制协议 v1（零依赖头文件，
+    网关侧持独立副本 + 契约测试防漂移）。全部整数大端；传输分帧 `[u32 len][msg]`，
+    `msg=[u8 ver=1][u8 kind][body]`；kind：Data/Sub/Unsub/Pli/SubOk/SubErr。
+    DATA body=`[u32 sid][u8 frame_type][u8 flags][u64 pts_us][u64 seq][payload]`（定长 22B）；
+    sid 由 SFU 按流名分配（u32 非 0、稳定）；SubOk 返回 sid 完成名字→索引握手；
+    flags bit0=kFlagKey；frame_type 与 frame_protoc 数值契约（static_assert 锁定）。
+  - `rtc/server/sfu_server/FrameDispatcher.{h,cpp}`：UDS 服务端（libev ev_io），融入 SFU 单线程
+    ev_loop。订阅表引用计数 + 扇出；写缓冲背压（高水位 2MB 丢非关键帧 / 硬限 8MB 关键帧也丢）；
+    PLI 按流 500ms 节流后经回调转上游 `requestKeyFrame()`；断连清理全部订阅引用；start() 自动
+    建父目录 + 陈旧 socket 探测清理；sid 持久（name→sid 不释放）。
+  - `SfuServer.{h,cpp}` 集成：`Config.frame_ipc_path`（默认 `/run/tj_rtc/frames.sock`，空=禁用）；
+    `OnEvStart` 建 dispatcher、`OnEvStop` 先停 IPC 再清会话；组帧回调 → `dispatchFrame`；
+    投喂门控 `isStreamActive`（无订阅者跳过组帧，惰性启停）；PrintProxyStats 增
+    `[IPC Dispatcher]: conns/streams/dispatched/no_sub/bp_drops/pli/throttled/errs` 行。
+  - `main.cpp`：`--frame-ipc <path>`（0 值复用 long option 4）。
+  - **FrameAssembler 缺口恢复修复**（4.14 交付物补丁）：无订阅者期间整段帧被跳过时，组帧器
+    游标帧"从未出现"，原超时丢弃逻辑无法推进游标 → 永久卡死。`checkFrameTimeouts` 增加：
+    自上次成功交付超过 frame_timeout 且存在更晚 pending 帧 → `cursor_gap_jumps++` 并跳过缺口。
+    该缺陷由本阶段真实链路冒烟（UNSUB→re-SUB）暴露，单测年代补 Test 6 锁定。
+  - `rtc/server/sfu_test/test_frame_ipc.cpp`（新测试目标，6 用例）：协议往返+契约 static_assert/
+    订阅→收帧→扇出→退订（isStreamActive 追踪）/背压丢非关键帧保 IDR/断连重连 sid 稳定/
+    PLI 节流与转发/SUB_ERR 单连接上限。单线程 `ev_run(EVRUN_NOWAIT)` pump 驱动。
+- 验证（全部通过）：
+  - `test_frame_ipc` 6/6、`test_frame_assembler` 6/6（含新增缺口恢复用例）；回归
+    `fec_test` 25/25、`cm256_test`、`test_server`、`test_integration`、`test_e2e` 全 PASS。
+  - 本机真实链路冒烟（未触碰 pi4_air；独立端口 9300/9301 + 独立流名 sim_ipc_smoke）：
+    `sfu_server_full -p 9300 -u 9301 --frame-ipc /tmp/tj_rtc_frames_smoke.sock -s 5` +
+    `sim_pusher --port 9300 --stream sim_ipc_smoke --duration 60` + Python IPC 客户端
+    （`/tmp/ipc_smoke.py`，按 FrameIpc.h 手写）：
+    SUB_OK sid=1 → 94 帧/3s seq 0..93 单调 key=6 ~750kbps → PLI → 1.5s 内上游关键帧 →
+    UNSUB 静默 0 帧 → re-SUB（sid 稳定=1）→ 63 帧/2s 恢复。
+    服务端 stats：`dispatched=186 no_sub=0 bp_drops=0 pli=1/1 errs=0`；
+    `Assembler: assembled=186 pending=0 timeouts=0 gap_jumps=1`（缺口恢复恰好触发 1 次）。
+- 调试经验：`pkill -f 'sfu_server_full -p 9300'` 会匹配到自身 wrapper shell 命令行而自杀
+  （exit 143）；用 `pgrep -af 'sfu_server_full [ ]-p'`（括号技巧）或按 PID 精确 kill。
+- 下一步：阶段 D（moq_gateway：`xqc_moq_demo_server.c` → `xqc_moq_gateway.c`；IPC 客户端
+  ev_io 融入 libevent；帧扇出 xqc_moq_write_video_frame；SUB/UNSUB/PLI↔引用计数；
+  `--stream` 多流；xquic 仓库内新文件 + OpenSpec change 治理）。
+
+### 4.16 MoQ 网关项目阶段 D 完成：moq_gateway（xquic 仓库，2026-10-12）
+
+- 交付物（xquic 仓库 `rtc/libs/xquic`，fork `xqiang-x/xquic` 分支 `dev/moq_gateway`
+  提交 `8187553`，已推；draft PR #1 标题/正文已更新为累计变更描述）：
+  - `moq/demo/xqc_moq_gateway.c`（约 990 行）：engine 骨架复制 demo server、删除假帧
+    生成器；CLI `--stream`（可重复）/`--ipc`/`-p`/`-l`/`-f`/编码元数据；extdata 匹配流名
+    （未识别发布全部）；建 track 与 catalog（namespace `tj/<stream>`、track `video`、LOC）。
+  - `moq/demo/xqc_moq_gateway_feed.{h,c}`：帧映射（IDR/key flag→KEY、VIDEO→DELTA、
+    PARAMS 缓存并合并进 IDR、AUDIO/DATA 忽略）；扇出表（上限 256、waiting-key 门控、
+    写失败计数）；订阅引用计数派生 SUB/UNSUB。
+  - `moq/demo/xqc_moq_gateway_ipc.{h,c}` + `xqc_moq_gateway_frame_ipc.h`（FrameIpc v1
+    独立 C 孪生，契约单测防漂移）：libevent UDS 客户端，非阻塞连接 + 1s 重连、分帧读、
+    未知版本/超长声明断开重连、SUB/UNSUB/PLI 发送、断连统计。
+  - `tests/unittest/xqc_moq_gateway_test.{c,h}`：4 用例（frame_map/params_merge/fanout/
+    ipc_client 真实 socket 往返 + 断连重连），`main.c` 注册（`#if XQC_ENABLE_MOQ`）；
+    `tests/CMakeLists.txt` 条件链接 libevent；`xqc_configure.h.in` 补
+    `#cmakedefine XQC_ENABLE_MOQ`；manifest moq 模块补 read/unit 路由。
+- 验证（全部通过）：
+  - `./scripts/validate.sh build|test --feature moq`：完整套件 274/274、9,430,984
+    asserts、CTest 1/1、`validation level 'test' passed`；提交后 4 个聚焦用例在新 head
+    复跑全过（exit=0）。
+  - 本机联调冒烟（未触碰 pi4_air；专用端口 9300/9301/8445 + socket
+    `/tmp/tj_rtc_sfu_smoke.sock` + 流名 gwsmoke）全链路
+    sim_pusher→SFU（组帧+IPC）→moq_gateway→（QUIC 8445, moq-quic）→moq_demo_client：
+    client 收 catalog + 722 帧视频（26 个 KEY）；PLI 闭环到推流端（client seq3 触发 →
+    gateway 节流 → SFU `PLI forwarded` → pusher `[Push] PLI received`）；客户端退出 →
+    gateway `dropping 1 track(s)` → SFU `UNSUB refcount=0`。
+  - 冒烟踩坑（持久结论）：**sim_pusher `--port` 必须给 SFU 的 TCP 基端口（9300）**——
+    SDK `Publisher::Start(udpPort=0)` 时 `m_udpPort = port + 1`（`Publisher.cpp:54`），
+    UDP 注册实际发往 9301；若给 9301 会发到 9302（STUN 服务），表现为"订阅响应超时"
+    但服务端毫无记录。python 探针直发 9301 可复现正常 `OK` 响应（对照定位用）。
+- OpenSpec/治理：`openspec/changes/add-moq-gateway`（proposal/design/tasks/spec，tasks
+  已全勾）按 harness 约定留本地、不进代码 PR；持久结论回填
+  `harness/spec/architecture.md`（MoQ 拓扑 + IPC 孪生说明）、
+  `harness/spec/harness-manifest.yml`（unit 路由）、`harness/decisions/records.md`
+  （ADR-H008：独立网关进程 + IPC 契约孪生）；`harness/scripts/xqc_harness_check.sh`
+  PASS。
+- Pre-review（draft PR 更新后执行，五段报告）：
+  `~/build/harness/pr-review-1/pr-review-1.md`，`pre_review_result: true`——
+  1) RFC n/a（diff 不含 `src/`/`include/xquic/` 运行时面，IPC 为私有本地契约）；
+  2) 验证覆盖 pass（每个可单测生产路径均有正+负用例；gateway.c 纯接线，冒烟覆盖）；
+  3) 对抗用例 pass（review-only harness A–E 实测：超长/超短声明长度 → 断连重连；
+     短 DATA 体 → 保连接且不投递；紧邻其后的合法帧精确投递证明无错位）；
+  4) 性能 pass（demo 尺度按检查推理，验证构建为 Debug 已声明）；
+  5) 内存安全 pass（rx 上限 4+2MiB、零拷贝回调作用域规则、固定表容量）。
+- 阶段 D 遗留（非阻塞，记录在案）：moq_gateway.c 引擎接线无单测（仅冒烟）；
+  分帧 drain 每消息一次 memmove（O(剩余)，30fps 单生产者下可接受，若量级增长再换环形缓冲）。
+- 下一步：阶段 E（xquic 补齐 WebTransport：SETTINGS enable_connect_protocol、
+  extended CONNECT（`:protocol=webtransport`）、session 对象、子流 4 字节 session_id
+  前缀、datagram quarter stream id 前缀，浏览器兼容 ALPN `h3`）。
+
+### 4.17 MoQ 网关项目阶段 E 完成：xquic 补齐 WebTransport（2026-10-13）
+
+- 交付物（xquic 仓库 `rtc/libs/xquic`，提交 `fd47c05`；含阶段 F 的兼容修复与
+  测试更新，见 4.18）：h3 栈原生 WebTransport，由 `xqc_config_t.enable_webtransport`
+  开关控制（默认关，存量行为零改动）：
+  - SETTINGS 播发：ENABLE_CONNECT_PROTOCOL(0x08)=1、H3_DATAGRAM(0x33)=1、
+    WEBTRANSPORT_MAX_SESSIONS(0xc671706a draft-07)、以及 draft-02 别名
+    H3_DATAGRAM_DRAFT04(0xffd277)=1、WEBTRANSPORT_DRAFT00(0x2b603742)=1；
+    接收端：四个布尔 setting 值 >1 → H3_SETTINGS_ERROR；HTTP/2 保留 setting
+    （0x02–0x05）按 RFC 9114 §7.2.4.1 拒连。
+  - extended CONNECT（RFC 9220，`:protocol=webtransport`）会话接受/拒绝；
+    公开 API `include/xquic/xqc_webtransport.h`（`xqc_wt_session_t`：accept/
+    reject、deferred accept、会话数上限、teardown 扇出回调）；draft-02 客户端
+    附带的 `sec-webtransport-http3-draft02` 请求头可忽略，响应无特殊要求。
+  - 流帧：uni `0x54 WEBTRANSPORT_STREAM` / bidi `0x41` + 4 字节 session-id
+    前缀（draft-07 §4/§5，draft-02 同构）；RFC 9297 datagram（quarter stream
+    id 前缀，空负载仍上报）+ capsule 解析（CLOSE/DRAIN/WT_MAX_DATA 等）；
+    session 缓冲上限与超限处理。
+  - MoQ over WebTransport：`XQC_MOQ_TRANSPORT_WEBTRANSPORT` 传输路径 +
+    `xqc_moq_init_alpn_h3()`；`moq_gateway` 新增 `--wt/--wt-cert/--wt-key`
+    浏览器入口（与既有 moq-quic 路径并存）。
+  - 测试：`xqc_test_wt_*` 16 用例（settings/connect/session/stream/datagram/
+    capsule/缓冲/teardown）+ `xqc_test_moq_wt_ops`；harness manifest 新增
+    webtransport feature 模块。
+- 验证：`./scripts/validate.sh test --feature moq` = CUnit **291/291**、
+  `validation level 'test' passed`；`xqc_harness_check.sh` PASS。
+- OpenSpec/治理：`openspec/changes/add-webtransport-support`（proposal/design/
+  tasks）按 harness 约定留本地、不进提交；结论回填 manifest feature 路由。
+
+### 4.18 MoQ 网关项目阶段 F 完成：Web demo 出画 + stock Chrome 兼容修复（2026-10-13）
+
+- 交付物：
+  - 主仓库 `apps/demos/moq_web`（提交 `ba91fcd`）：浏览器 MoQ 播放页
+    （WebTransport + WebCodecs，无需插件；线协议 draft-05 子集 0xff000005 +
+    LOC 重组）；`run_demo.sh` 一键：生成证书 → 起 `moq_gateway --wt` → 起静态
+    服务并打印可直接打开的 URL；README 含快速开始/手动步骤/排查/LAN 限制。
+  - xquic draft-02 兼容修复（并入 `fd47c05`，见下）。
+- **根因定位**（stock Chrome 连接失败 `ERR_METHOD_NOT_SUPPORTED`）：
+  Chromium/quiche 的 `SupportsWebTransport()` 要求双方 WebTransport 版本集合
+  非空（取交集最大者）。Chrome 146 标配只声明 **draft-02**（kDraft02；draft-07
+  仅在 `--enable-features=EnableWebTransportDraft07` 开启），而修复前 xquic
+  服务端只播发 draft-07（0xc671706a）→ 交集为空 → `NegotiatedWebTransportVersion()`
+  = nullopt → CONNECT 完成后立即失败。netlog 时间线佐证：服务器 TP（含
+  max_datagram_frame_size=65535）→ 处理服务器 h3 SETTINGS（3 号流）→
+  `WEBTRANSPORT_CLIENT_STATE_CHANGED CONNECTING→FAILED` → 随后 HANDSHAKE_DONE；
+  结论经 Chromium/quiche 源码 + Chrome 二进制常量字符串交叉验证。
+- **修复（xquic，3 文件）**：SETTINGS 写入端在条目组内补发两个 draft-02 别名
+  （`0x2b603742`=1、`0xffd277`=1；常量取 quiche 同名值），接收端容忍并做布尔
+  校验；draft-02 与 draft-07 的流帧/datagram/capsule 线上格式一致，无分支差异。
+  自检：`xqc_test_wt_settings` 更新（计数 6→8、补值断言、补 2 条非法值用例）
+  —— 该用例曾正确抓住过修复后的计数漂移。
+- 验证（全部通过）：
+  - xquic 单测 291/291（含更新后的 settings 用例）。
+  - E2E 双路径（本机，流名 `demo_test` 避开生产 openhd0）：**stock Chrome
+    无 flag（draft-02）** 打开即连，2.1s 出画：decoded=32、fps=30、dropped=0、
+    画布 1280x720；**`--enable-features=EnableWebTransportDraft07`（draft-07）**
+    同样全流程通过（此前无 flag 路径为失败态，修复后转绿）。
+- 运行方式（本机演示，不触碰生产）：
+  - 构建网关：`(cd rtc/libs/xquic && ./scripts/validate.sh build --feature moq)`
+  - SFU：`./build/bin/sfu_server_full -p 9200 -u 9201 --frame-ipc /tmp/tj_rtc_sfu.sock`
+  - 推流：`build_sim_pusher/sim_pusher --server 127.0.0.1 --port 9200 --stream demo_test`
+  - 网关+页面：`cd apps/demos/moq_web && ./run_demo.sh --stream demo_test` →
+    浏览器打开打印的 `http://localhost:8080/?...`（Chrome，localhost 为安全
+    上下文；LAN 访问需 Chrome 白名单 flag，见 README）。
+  - 本机自动回归脚本 `/tmp/moq-test/`（单文件页 + CDP 驱动，仅本机、不入库）。
+- 部署示例（systemd，路径按实际调整；仅列关键行，未在本机 systemd 实测）：
+  ```ini
+  # /etc/systemd/system/tj_rtc_sfu.service
+  [Service]
+  ExecStart=/opt/tj_rtc/bin/sfu_server_full -p 9200 -u 9201 --frame-ipc /run/tj_rtc/frames.sock
+  RuntimeDirectory=tj_rtc
+  Restart=on-failure
+  ```
+  ```ini
+  # /etc/systemd/system/tj_rtc_gateway.service
+  [Service]
+  WorkingDirectory=/opt/tj_rtc/moq_web
+  ExecStart=/opt/tj_rtc/moq_gateway --wt --wt-cert certs/server.crt --wt-key certs/server.key \
+      -p 8443 --stream openhd0 --ipc /run/tj_rtc/frames.sock
+  Restart=on-failure
+  ```
+  （`RuntimeDirectory=tj_rtc` 由 systemd 创建 `/run/tj_rtc` 并授权；
+  网关 IPC 路径必须与 SFU `--frame-ipc` 一致，`--stream` 列 SFU 实际流名。
+  网关连不上 SFU 时会每 1s 重连，启动顺序不敏感。）
+- 调试经验：手工拼测试 URL 时指纹参数必须 URL 编码（base64 的 `+` 要写 `%2B`，
+  否则 `URLSearchParams` 解成空格、页面 `atob` 报 "not correctly encoded"）；
+  `run_demo.sh` 内部走 `urlencode`，输出 URL 已正确。
+- 下一步（待用户决策）：xquic `fd47c05` 推送 fork + draft PR #1 更新；
+  主仓库推送（feature/wq）；生产链路接入（远端 SFU 106.15.177.248 需部署带
+  `--frame-ipc` 的新版 `sfu_server_full`，**需用户确认后执行**）。
+
 ## 5. 构建 / 安装 / 调试速查
 
 - 构建脚本：`bash /tmp/rebuild_rtc.sh`（增量 make + install + androiddeployqt；
@@ -294,7 +542,9 @@ nohup setsid ./pi4_air --stream openhd0 --user pi4_air > ~/tj_rtc/pi4_air.log 2>
 
 1. **推送 GitHub**（顺序 OpenHD → QOpenHD → tj_rtc），推送后核对 `.gitmodules` URL 可克隆性。
    待推新增：tj_rtc 的 `ac79d2a`（RECV_REPORT）、`86d46cf`（pi4_air）、`6c86652`（jetson）、
-   目录重组提交；子模块内目录适配改动建议先在各自 feature/wq 提交再推。
+   `5ef54bc`（重组）、`83f99a9`（SFU 组帧+IPC）、`ba91fcd`（moq_web）与本提交；
+   xquic（嵌套仓库）`fd47c05` 推 fork 并更新 draft PR #1；子模块内目录适配改动建议
+   先在各自 feature/wq 提交再推。
 2. **pi4 air 已首跑出画（2026-09-23）**；剩余：**Pixhawk 插到 pi 后验证串口桥**
    （pi4 日志 `serial=OK`、`mav_tx/hb` 增长；手机上行 `up_write` 增长）；长稳观察。
 3. **现场联调**：真实相机源（HDMI/CSI）+ 延迟/丢包观察；复核 `bug.md` Bug 1
@@ -310,6 +560,10 @@ nohup setsid ./pi4_air --stream openhd0 --user pi4_air > ~/tj_rtc/pi4_air.log 2>
    （09-23 装包后 `restarts` 1→6、每次 ~5-7s 自动恢复，logcat 见
    `no video frames for 5s ... forcing re-subscribe`）。剩余：**环境侧排查入向 UDP 黑洞**
    （手机切 5G/其他网络验证，见 4.9；必要时评估改走 TCP 媒体 `qopenhd_rtc_use_udp=false`）。
+7. **MoQ 支线生产接入（阶段 G 后）**：远端 SFU 106.15.177.248 部署带 `--frame-ipc`
+   的新版 `sfu_server_full`（**需用户确认后执行**）+ 网关服务化（§4.18 systemd 示例）；
+   真机链路联调（pi4_air openhd0 → SFU → moq_gateway → 浏览器）。WebTransport
+   已是 draft-02/draft-07 双版本兼容，后续 Chrome 默认开 draft-07 无需改动。
 
 
 ## 附录 A：当前 gst 测试源命令（本机 127.0.0.1:5600）
