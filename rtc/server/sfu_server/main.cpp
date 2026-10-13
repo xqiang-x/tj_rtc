@@ -39,6 +39,8 @@ void PrintUsage(const char* prog) {
     printf("  -v, --verbose           Enable verbose logging\n");
     printf("  -q, --quiet             Disable stats printing\n");
     printf("  --tcp-only              Disable UDP (default: TCP enabled)\n");
+    printf("  --frame-ipc <path>      Frame IPC (MoQ gateway) UDS path\n");
+    printf("                          (default: /run/tj_rtc/frames.sock, empty = disabled)\n");
     printf("  --log-dir <dir>         glog output directory (default: /tmp)\n");
     printf("\nExamples:\n");
     printf("  %s                      # Start with defaults on port 9200 (TCP only)\n", prog);
@@ -63,6 +65,7 @@ int main(int argc, char* argv[]) {
     int udp_port = 0;
     int stun_port = 0;
     std::string log_dir = "";
+    std::string frame_ipc_path = "/run/tj_rtc/frames.sock";  // 空 = 禁用
 
     // Parse command line arguments
     static struct option long_options[] = {
@@ -78,6 +81,7 @@ int main(int argc, char* argv[]) {
         {"quiet",         no_argument,       0, 'q'},
         {"tcp-only",      no_argument,       0, 1},
         {"log-dir",       required_argument, 0, 3},
+        {"frame-ipc",     required_argument, 0, 4},
         {0, 0, 0, 0}
     };
 
@@ -157,6 +161,10 @@ int main(int argc, char* argv[]) {
                 log_dir = optarg;
                 break;
 
+            case 4:  // --frame-ipc
+                frame_ipc_path = optarg;
+                break;
+
             default:
                 PrintUsage(argv[0]);
                 return 1;
@@ -201,6 +209,7 @@ int main(int argc, char* argv[]) {
     config.stats_interval_sec = stats_interval;
     config.session_timeout_sec = session_timeout;
     config.verbose = verbose;
+    config.frame_ipc_path = frame_ipc_path;
 
     LOG(INFO) << "Configuration:";
     LOG(INFO) << "  TCP listen:        " << config.listen_ip << ":" << config.listen_port
@@ -218,6 +227,9 @@ int main(int argc, char* argv[]) {
     LOG(INFO) << "  Stats interval:    " << (enable_stats ? std::to_string(stats_interval) + "s" : "disabled");
     LOG(INFO) << "  Session timeout:   " << config.session_timeout_sec << "s";
     LOG(INFO) << "  Verbose logging:   " << (config.verbose ? "enabled" : "disabled");
+    LOG(INFO) << "  Frame IPC:         "
+              << (config.frame_ipc_path.empty() ? "disabled"
+                                                : config.frame_ipc_path + " (MoQ gateway UDS)");
     LOG(INFO) << "  glog dir:          " << (log_dir.empty() ? "/tmp (default)" : log_dir);
 
     // Create and start server. The server must be destroyed before the event

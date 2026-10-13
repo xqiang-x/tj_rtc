@@ -8,6 +8,7 @@ add_library(sfu_server STATIC
     SfuServerBase.cpp
     SfuConnManager.cpp
     SfuServer.cpp
+    FrameDispatcher.cpp
     StunService.cpp
 )
 

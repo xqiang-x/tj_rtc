@@ -2,6 +2,7 @@
 #include "SfuConnManager.h"
 #include "SfuEvPool.h"
 #include "SfuKvStore.h"
+#include "FrameDispatcher.h"
 #include "receiver.h"
 #include "sender.h"
 
@@ -117,10 +118,52 @@ void SfuServerFull::Stop() {
 
 // ======================== Public Management APIs ========================
 
+// 服务器启动回调：基类挂载 sockets/timers 后，初始化 FrameDispatcher（UDS IPC）。
+// 运行在 ev_loop 线程，此后 dispatcher 的 ev_io 回调与组帧回调同线程访问，无需加锁。
+void SfuServerFull::OnEvStart() {
+    SfuServerBase::OnEvStart();
+
+    if (m_config.frame_ipc_path.empty()) {
+        LOG(INFO) << "[SFU-IPC] disabled (empty frame_ipc_path)";
+        return;
+    }
+    struct ev_loop* loop = GetLoop();
+    if (!loop) {
+        LOG(ERROR) << "[SFU-IPC] no event loop, dispatcher disabled";
+        return;
+    }
+
+    auto pli_handler = [this](const std::string& stream_id) -> bool {
+        auto sit = m_streams.find(stream_id);
+        if (sit == m_streams.end() || sit->second->publisher_session_id == 0) return false;
+        auto pit = m_sessions.find(sit->second->publisher_session_id);
+        if (pit == m_sessions.end()) return false;
+        SfuSession* pub = pit->second.get();
+        if (!pub->proxy_receiver) return false;
+        // 与下行 PLI 链共用推流端 500ms 节流（HandleStreamData 路径外的第二入口，
+        // dispatcher 自身亦按流节流，双重防护）
+        pub->proxy_receiver->requestKeyFrame();
+        return true;
+    };
+
+    m_frame_dispatcher = std::make_unique<FrameDispatcher>(
+        loop, m_config.frame_ipc_path, std::move(pli_handler));
+    if (!m_frame_dispatcher->start()) {
+        LOG(ERROR) << "[SFU-IPC] dispatcher start failed, IPC disabled";
+        m_frame_dispatcher.reset();
+    }
+}
+
 // 服务器停止回调：运行在 ev_loop 线程。基类已停掉全部 watchers/timers，
 // 此后 loop 线程不会再进入本服务器的任何回调，可安全回收会话与流数据。
 void SfuServerFull::OnEvStop() {
     SfuServerBase::OnEvStop();
+
+    // 先停 IPC（关闭网关连接与 sock 路径）；此后 dispatcher 不再被访问
+    if (m_frame_dispatcher) {
+        m_frame_dispatcher->stop();
+        m_frame_dispatcher.reset();
+    }
 
     m_sessions.clear();
     m_fdToSession.clear();
@@ -182,6 +225,7 @@ void SfuServerFull::PrintProxyStats() const {
     uint64_t total_cache_hits = 0, total_cache_misses = 0;
     uint64_t total_upstream_nacks = 0, total_suppressed = 0, total_recovered = 0;
     uint64_t total_pongs = 0;
+    uint64_t total_assembled = 0, total_timed_out = 0;
     
     for (const auto& pair : m_sessions) {
         const auto* session = pair.second.get();
@@ -224,9 +268,40 @@ void SfuServerFull::PrintProxyStats() const {
                    (unsigned long long)stats.upstream_nack_recovered);
             pf("    Cache size: %llu / %u entries\n",
                    (unsigned long long)stats.cache_size, session->proxy_receiver->maxCacheEntries());
+
+            // Assembler（组帧）统计：每流一行
+            if (session->frame_assembler) {
+                const auto& as = session->frame_assembler->getStats();
+                pf("    Assembler[%s]: assembled=%llu kbps=%u pending=%llu timeouts=%llu evicted=%llu gap_jumps=%llu\n",
+                       session->stream_id.c_str(),
+                       (unsigned long long)as.frames_assembled, as.assembled_kbps,
+                       (unsigned long long)as.pending_frames,
+                       (unsigned long long)as.frames_timed_out,
+                       (unsigned long long)as.frames_evicted,
+                       (unsigned long long)as.cursor_gap_jumps);
+                total_assembled += as.frames_assembled;
+                total_timed_out += as.frames_timed_out;
+            }
         }
     }
     
+    // IPC 派发器（MoQ 网关）统计：一行汇总
+    if (m_frame_dispatcher) {
+        const auto& ds = m_frame_dispatcher->getStats();
+        pf("\n  [IPC Dispatcher]: conns=%zu streams=%zu dispatched=%llu no_sub=%llu "
+           "bp_drops=%llu too_large=%llu pli=%llu/%llu throttled=%llu errs=%llu\n",
+               m_frame_dispatcher->connCount(),
+               m_frame_dispatcher->activeStreamCount(),
+               (unsigned long long)ds.frames_dispatched,
+               (unsigned long long)ds.frames_no_subscriber,
+               (unsigned long long)ds.frames_dropped_backpressure,
+               (unsigned long long)ds.frames_too_large,
+               (unsigned long long)ds.pli_forwarded,
+               (unsigned long long)ds.pli_received,
+               (unsigned long long)ds.pli_throttled,
+               (unsigned long long)ds.parse_errors);
+    }
+
     if (has_proxy) {
         float overall_hit_rate = (total_cache_hits + total_cache_misses) > 0
             ? (float)total_cache_hits / (total_cache_hits + total_cache_misses) * 100.0f
@@ -242,6 +317,9 @@ void SfuServerFull::PrintProxyStats() const {
                (unsigned long long)total_upstream_nacks,
                (unsigned long long)total_suppressed,
                (unsigned long long)total_recovered);
+        pf("    Assembled frames: %llu  Timed out: %llu\n",
+               (unsigned long long)total_assembled,
+               (unsigned long long)total_timed_out);
         pf("    Cache hit rate: %.1f%% (%llu/%llu)\n",
                overall_hit_rate,
                (unsigned long long)total_cache_hits,
@@ -318,6 +396,14 @@ void SfuServerFull::AdjustProxyFecRatio() {
         // Get current FEC ratio from session tracking
         float current_ratio = session->current_fec_ratio;
 
+        // 上游组帧观测（帧级）：与下游 miss rate 对照，区分上下游链路问题
+        uint64_t up_assembled = 0, up_timeouts = 0;
+        if (session->frame_assembler) {
+            const auto& as = session->frame_assembler->getStats();
+            up_assembled = as.frames_assembled;
+            up_timeouts = as.frames_timed_out;
+        }
+
         // High miss rate (>30%) -> increase FEC ratio
         // Low miss rate (<5%) -> decrease FEC ratio
         if (miss_rate > 0.3f) {
@@ -327,7 +413,8 @@ void SfuServerFull::AdjustProxyFecRatio() {
             session->current_fec_ratio = new_ratio;
             LOG(INFO) << "[SFU-PROXY] Session " << session->session_id
                       << " increased FEC ratio to " << new_ratio
-                      << " (miss rate: " << (miss_rate * 100) << "%)";
+                      << " (miss rate: " << (miss_rate * 100) << "%, upstream: assembled="
+                      << up_assembled << " timeouts=" << up_timeouts << ")";
         } else if (miss_rate < 0.05f && current_ratio > 0.1f) {
             // Decrease FEC: subtract 0.05, min 0.1
             float new_ratio = std::max(0.1f, current_ratio - 0.05f);
@@ -335,7 +422,8 @@ void SfuServerFull::AdjustProxyFecRatio() {
             session->current_fec_ratio = new_ratio;
             LOG(INFO) << "[SFU-PROXY] Session " << session->session_id
                       << " decreased FEC ratio to " << new_ratio
-                      << " (miss rate: " << (miss_rate * 100) << "%)";
+                      << " (miss rate: " << (miss_rate * 100) << "%, upstream: assembled="
+                      << up_assembled << " timeouts=" << up_timeouts << ")";
         }
     }
 }
@@ -1042,6 +1130,31 @@ void SfuServerFull::HandleStreamData(ConnInfo* conn, const uint8_t* data, size_t
         setupProxyCallbacks(source_session, stream_id);
         
         LOG(INFO) << "[SFU-PROXY] ProxyReceiver initialized for session " << sd.sessionId;
+
+        // FrameAssembler：与代理并行消费同一 DATA 流，只读组帧（零回包）。
+        // 阶段 C 起帧回调接入 FrameDispatcher（IPC），当前仅 debug 日志。
+        fec_protocol::FrameAssemblerConfig assembler_cfg;
+        assembler_cfg.frame_timeout_ms = 2000;
+        assembler_cfg.max_pending_frames = 64;
+        source_session->frame_assembler =
+            std::make_unique<fec_protocol::FrameAssembler>(assembler_cfg);
+
+        std::string asm_stream = stream_id;  // 回调捕获用（会话生命周期内不变）
+        SfuServerFull* self = this;
+        source_session->frame_assembler->setFrameReadyCallback(
+            [self, asm_stream](fec_protocol::Frame&& frame) {
+                // 帧派发：网关订阅者经 FrameDispatcher（IPC）消费；
+                // dispatcher 关闭/未启用时回落 debug 日志
+                if (self->m_frame_dispatcher) {
+                    self->m_frame_dispatcher->dispatchFrame(asm_stream, std::move(frame));
+                } else {
+                    SFU_DEBUG_LOG("Assembler frame ready stream=" << asm_stream
+                              << " type=" << static_cast<int>(frame.type)
+                              << " size=" << frame.size);
+                }
+            });
+
+        LOG(INFO) << "[SFU-ASSEMBLER] FrameAssembler initialized for session " << sd.sessionId;
     }
     
     // Process through ProxyReceiver for UDP publishers
@@ -1080,10 +1193,22 @@ void SfuServerFull::HandleStreamData(ConnInfo* conn, const uint8_t* data, size_t
             if (!forwarded) {
                 SFU_DEBUG_LOG("ProxyReceiver dropped packet for session " << sd.sessionId);
             }
+            // 组帧器并行投喂（只读消费，不影响 proxy 转发/过滤/NACK 行为）。
+            // 启用 IPC 派发时按订阅懒启动：无网关订阅者的流跳过组帧（省 CPU/内存）
+            if (source_session->frame_assembler &&
+                (!m_frame_dispatcher || m_frame_dispatcher->isStreamActive(stream_id))) {
+                source_session->frame_assembler->onDataPacket(
+                    sd.payload, sd.payloadLen, now_us);
+            }
         }
 
         // Drive cache eviction and active upstream NACK generation
         source_session->proxy_receiver->tick(now_us);
+
+        // 组帧器超时扫描（内部按 tick_interval 节流）
+        if (source_session->frame_assembler) {
+            source_session->frame_assembler->tick(now_us);
+        }
 
         return;  // ProxyReceiver handles forwarding
     }

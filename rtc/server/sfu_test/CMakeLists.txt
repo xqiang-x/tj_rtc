@@ -8,3 +8,9 @@ target_link_libraries(test_integration PRIVATE sfu_server)
 
 add_executable(test_e2e test_e2e.cpp)
 target_link_libraries(test_e2e PRIVATE sfu_server)
+
+add_executable(test_frame_assembler test_frame_assembler.cpp)
+target_link_libraries(test_frame_assembler PRIVATE sfu_server)
+
+add_executable(test_frame_ipc test_frame_ipc.cpp)
+target_link_libraries(test_frame_ipc PRIVATE sfu_server)

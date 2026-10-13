@@ -8,6 +8,7 @@
 #include "SfuP2PProtocol.h"
 #include "StunService.h"
 #include "proxy_receiver.h"
+#include "frame_assembler.h"
 #include "Pacer.h"
 #include "MemPool.h"
 
@@ -28,6 +29,7 @@ struct ev_loop;
 namespace sfu {
 
 class SfuServerFull;
+class FrameDispatcher;
 
 // Session information stored in SFU
 struct SfuSession {
@@ -59,6 +61,11 @@ struct SfuSession {
     // ProxyReceiver for UDP publishers (FEC filtering + NACK + cache)
     std::unique_ptr<fec_protocol::ProxyFrameReceiver> proxy_receiver;
     float current_fec_ratio = 0.25f;  // Tracked downstream FEC ratio for dynamic adjustment
+
+    // FrameAssembler for UDP publishers: reassembles complete frames from the
+    // same DATA packets the ProxyFrameReceiver forwards (read-only, no replies).
+    // Lazy-created on first DATA packet; feeds the frame dispatcher (IPC) later.
+    std::unique_ptr<fec_protocol::FrameAssembler> frame_assembler;
 
     // PLI (key-frame request) throttle: at most one forwarded upstream per 500ms
     std::chrono::steady_clock::time_point last_pli_forward_time{};  // epoch = never forwarded
@@ -123,6 +130,8 @@ public:
         int stats_interval_sec = 10;
         int session_timeout_sec = 3; // 3 seconds for UDP, 3600 for TCP
         bool verbose = false;
+        // Frame IPC（MoQ 网关派发）：UDS 路径；空 = 禁用
+        std::string frame_ipc_path = "/run/tj_rtc/frames.sock";
     };
 
     explicit SfuServerFull(const Config& config);
@@ -211,6 +220,10 @@ public:
     // Called from the per-session pacing ev_timer (via static trampoline)
     void DrainPendingSend(SfuSession* s);
 
+    // 服务器启动回调（ev_loop 线程执行）：基类挂载 sockets/timers 后，
+    // 初始化 FrameDispatcher（UDS IPC 服务端）
+    void OnEvStart() override;
+
     // 服务器停止回调（ev_loop 线程执行）：停 watchers/timers 后清理会话与流。
     // 单线程模型：该回调之后 loop 线程不会再进入本服务器的任何回调。
     void OnEvStop() override;
@@ -251,6 +264,9 @@ private:
     
     // UDP 发送包内存池（单线程事件循环中使用，无锁）
     mempool::FixedMemoryPool m_udpPool{512};  // 预分配 512 块 * 1500 字节
+
+    // Frame IPC 派发器（仅 ev_loop 线程访问；无订阅者可空）
+    std::unique_ptr<FrameDispatcher> m_frame_dispatcher;
 
     // STUN service
     std::atomic<int> m_stunSocketFd{-1};   // STUN 线程与主线程共享
